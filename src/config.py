@@ -75,6 +75,9 @@ class TrainCfg:
     seed: int = 0             # model seed：初始化 / 打乱 / dropout
     log_every: int = 1
 
+    # ---- 标签噪声注入（默认 0 = 不动标签；用于检验抗噪性，只翻训练行） ----
+    label_noise: float = 0.0  # 对称翻转比例：随机把 label 0<->1
+
     # ---- MCC 引导的类权重自适应（旧 IDPP 的机制，默认关，消融用） ----
     mcc_adaptive: bool = False   # 开启后每 mcc_interval 轮按 val 的 FN/FP 率改类权重
     mcc_interval: int = 3        # 每隔几轮调一次

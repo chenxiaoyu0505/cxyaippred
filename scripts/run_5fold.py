@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 一条命令跑完 5 折：建缓存 → 逐折训练 → 汇总评估 → 登记 manifest。
@@ -127,6 +127,7 @@ def main():
     ap.add_argument('--lr', type=float, default=1e-4)
     ap.add_argument('--patience', type=int, default=10)
     ap.add_argument('--pos-weight', type=float, default=0.0)
+    ap.add_argument('--label-noise', type=float, default=0.0, help='标签噪声注入比例（只翻训练行）')
     ap.add_argument('--ema', action='store_true')
     ap.add_argument('--ema-alpha', type=float, default=0.7)
     ap.add_argument('--ema-decay', type=float, default=0.99)
@@ -232,6 +233,7 @@ def main():
                    '--epochs', str(args.epochs), '--batch-size', str(args.batch_size),
                    '--lr', str(args.lr), '--patience', str(args.patience),
                    '--pos-weight', str(args.pos_weight),
+                '--label-noise', str(args.label_noise),
                    '--ema-alpha', str(args.ema_alpha),
                    '--ema-decay', str(args.ema_decay),
                    '--ema-warmup', str(args.ema_warmup),
@@ -277,7 +279,7 @@ def main():
             'skipped_runs': len(skipped),
             'settings': {'epochs': args.epochs, 'batch_size': args.batch_size,
                          'lr': args.lr, 'patience': args.patience,
-                         'pos_weight': args.pos_weight, 'ema': args.ema,
+                         'pos_weight': args.pos_weight, 'label_noise': args.label_noise, 'ema': args.ema,
                          'ema_alpha': args.ema_alpha, 'ema_decay': args.ema_decay,
                          'ema_warmup': args.ema_warmup,
                          'mcc_adaptive': args.mcc_adaptive,

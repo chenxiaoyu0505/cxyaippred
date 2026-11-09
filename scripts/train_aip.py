@@ -125,6 +125,8 @@ def main():
     ap.add_argument('--weight-decay', type=float, default=0.0)
     ap.add_argument('--patience', type=int, default=10)
     ap.add_argument('--pos-weight', type=float, default=0.0)
+    ap.add_argument('--label-noise', type=float, default=0.0,
+                    help='标签噪声注入比例（只翻训练行，对称翻转；默认 0=不动）')
     ap.add_argument('--mcc-adaptive', action='store_true',
                     help='启用 MCC 引导的类权重自适应（旧 IDPP 机制；依赖验证集）')
     ap.add_argument('--mcc-interval', type=int, default=3)
@@ -157,6 +159,7 @@ def main():
     cfg.train.weight_decay = args.weight_decay
     cfg.train.patience = args.patience
     cfg.train.pos_weight = args.pos_weight
+    cfg.train.label_noise = args.label_noise
     cfg.train.mcc_adaptive = args.mcc_adaptive
     cfg.train.mcc_interval = args.mcc_interval
     cfg.train.mcc_rate = args.mcc_rate
@@ -195,6 +198,22 @@ def main():
     hand = hand_feats(table, cfg.data.cache_dir)
     emb, mask = load_esm_cache(cfg.data.cache_dir, table)
 
+    # ---- 标签噪声注入（可审计：翻转了哪些行全部落盘）----
+    y_fit = y
+    if cfg.train.label_noise > 0:
+        rng = np.random.default_rng(cfg.train.seed * 100003 + cfg.fold)
+        tr = np.asarray(folds['train'])
+        flip = rng.random(len(tr)) < cfg.train.label_noise
+        y_fit = y.copy()
+        y_fit[tr[flip]] = 1.0 - y_fit[tr[flip]]
+        rec = {'enabled': True, 'rate': cfg.train.label_noise,
+               'n_train': int(len(tr)), 'n_flipped': int(flip.sum()),
+               'seed': cfg.train.seed, 'fold': cfg.fold,
+               'rows': [int(r) for r in tr[flip]]}
+        save_json(rec, os.path.join(run_dir, 'label_noise.json'))
+        print('[%s] 标签噪声 %.1f%%：翻转 %d / %d 条训练样本'
+              % (run_name, 100 * cfg.train.label_noise, rec['n_flipped'], rec['n_train']))
+
     n = len(table)
     print('[%s] 数据 %d | train %d / val %d / test %d | 阳性率 %.3f'
           % (run_name, n, len(folds['train']), len(folds['val']), len(folds['test']),
@@ -232,7 +251,7 @@ def main():
 
     for epoch in range(cfg.train.epochs):
         sat.set_epoch(epoch)
-        loss = train_epoch(head, opt, sat, folds['train'], emb, mask, hand, y,
+        loss = train_epoch(head, opt, sat, folds['train'], emb, mask, hand, y_fit,
                            cfg, device, pos_weight,
                            tuple(cls_w) if cfg.train.mcc_adaptive else None)
 

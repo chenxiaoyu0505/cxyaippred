@@ -1,140 +1,160 @@
-# cxyaippred —— 单任务 AIP 预测（重新起步）
+# cxyaippred
 
-这个目录是"放弃双任务、只做抗炎肽（AIP）预测"的新工程。**代码已完成并通过自检，尚未跑真实训练。**
+Anti-inflammatory peptide (AIP) prediction with protein language model embeddings and
+physicochemical descriptors — a small, auditable training/evaluation pipeline built for
+reproducible benchmarking rather than leaderboard chasing.
+
+**Status:** code complete and self-tested; no production training run yet in this repository.
 
 ---
 
-## 快速开始
+## What it does
+
+Given a peptide sequence, predict whether it is anti-inflammatory.
+
+- **Representation** — frozen ESM-2 (`esm2_t33_650M_UR50D`, layer 33) + 694 handcrafted
+  descriptors (AAC, GAAC, DPC, CKSAAGP, PAAC, CTD, 12 physicochemical properties)
+- **Head** — 2 residual 1D-conv blocks over the residue embeddings, masked mean pooling,
+  concatenation with the handcrafted vector, shared 512-d layer, per-task output
+- **Optional training tricks** (both off by default, both ablatable):
+  EMA self-distillation ("EMA-SAT") and MCC-guided class-weight adaptation
+- **Evaluation** — fixed 5-fold splits, threshold-free metrics (AUROC/AUPR) reported
+  alongside thresholded ones, bootstrap CIs, and a leave-one-fold-out ensemble
+
+Two design rules make the numbers auditable:
+
+1. **Training writes probabilities, evaluation computes metrics.** No metric is ever
+   computed twice from different code paths.
+2. **One experiment, one directory.** `--exp` is required and colliding names are
+   rejected, so parameter sets can never silently mix inside a results folder.
+
+---
+
+## Install
 
 ```bash
 conda env create -f environment.yml && conda activate cxyaippred
-pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128   # 或 pip install torch (Mac)
-python scripts/check_env.py     # 真跑一次 GPU 卷积，确认真能用
-python scripts/preflight.py     # 数据/划分/缓存/权重/磁盘
-python scripts/run_5fold.py --exp cv5 --note "5折主实验"
-python scripts/list_exps.py     # 看所有实验与主指标
+pip install torch                                                          # macOS / CPU
+# pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128   # NVIDIA (RTX 50 series)
+python scripts/check_env.py
 ```
 
-Windows / macOS / Linux 的差异、Mac 上 MPS 的注意事项、各平台预期耗时见 **[docs/INSTALL.md](docs/INSTALL.md)**。
+`check_env.py` runs an actual convolution on the target device — `torch.cuda.is_available()`
+is not trusted, because it returns `True` on machines where kernels are missing.
 
-设计上的两条硬规则：
-
-- **train 只产概率，eval 才算指标**——同一指标不会出现两个数（原稿 Fig 3 的 PIP MCC 0.3123 与 Table 2 的 0.3497 就是这么来的）；
-- **一个实验一个目录**（`experiments/<exp>/`），`--exp` 必填且重名会被拒绝，避免参数混写。
+Platform specifics, verified versions and expected runtimes: **[docs/INSTALL.md](docs/INSTALL.md)**.
 
 ---
 
-## 一、为什么可以这样重开
+## Data
 
-放弃双任务后，原稿里最硬的两条批评自动消失：
-
-| 原批评 | 在新定位下 |
-|---|---|
-| R1-1「多任务学习收益未证，须与单任务/常规 masked MTL 对比」 | 不再存在——本身就是单任务 |
-| R1-2「只在 10 条双标注肽上评估」 | 不再存在——不存在"双向肽"这个说法 |
-| R2 的 mask / 部分标注问题 | 不再存在——所有样本都有 AIP 标签 |
-
-**更重要的是一个实测发现**：AIP 子集本身非常干净。
-
-| | 行数 | 唯一序列 | 重复 | 标签冲突 | 与测试集重叠 |
-|---|---|---|---|---|---|
-| AIP 训练 | 4,224 | 4,224 | 0 | 0 | **0** |
-| AIP 测试 | 462 | 462 | 0 | 0 | — |
-
-对比一下 PIP 子集：训练/测试共有 **109 条序列重叠**、测试集内有 8 条重复。也就是说，审稿人说的"序列相似性泄漏"主要发生在 PIP 上，AIP 这一侧连精确重叠都没有。
-
-⚠️ 但这不等于"没有泄漏"。4,224 条里仍可能有高同源序列分处训练/测试两侧，**必须做聚类划分才能证明**（见第三节）。
-
----
-
-## 二、数据
-
-`data/aip_train.csv`、`data/aip_test.csv`，两列：
-
-| 列 | 含义 |
-|---|---|
-| `sequence` | 氨基酸序列（大写，已去空白） |
-| `label` | 1 = AIP 阳性，0 = 阴性 |
-
-来源：`D:\BIP\data\train2.csv` / `test.csv` 中 `mask-aip == 1` 的行，只保留 `squence` / `label-aip`。
-生成脚本：`scripts/make_aip_dataset.py`（幂等，可重跑核对）。
-
-| | 训练 | 测试 |
+| File | Rows | Description |
 |---|---|---|
-| 行数 | 4,224 | 462 |
-| 阳性 / 阴性 | 1,655 / 2,569 | 185 / 277 |
-| 阳性率 | 39.2% | 40.0% |
-| 长度 中位数 / 95% / 最大 | 15 / 20 / 73 | 15 / 26 / 56 |
+| `data/aip_all.csv` | 4,686 | `sequence,label`; 1,840 positives (39.3%) |
+| `data/splits/split_seed42_n5/folds.csv` | 23,430 | long format: `sequence,label,fold,split` |
+| `data/splits/legacy_seed42/folds.csv` | 5,148 | original 4,224/462 split, for comparison with published baselines |
 
-详细核对见 `data/DATA_STATS.md`。
+Positive rate 39.3%, median length 15 aa (max 73). No duplicate sequences, no conflicting
+labels, and the 5 test folds partition the dataset exactly once.
+
+The split is a fixed artifact, not something regenerated at training time: each run records
+its SHA-256, and `scripts/make_5fold.py` reproduces it bit-for-bit from `data/aip_all.csv`.
 
 ---
 
-## 三、起点成绩（现有多任务模型的 AIP 头）
+## Usage
 
-这是旧模型在 AIP 上的实测成绩，可作为"重写后不许更差"的基线：
+```bash
+python scripts/preflight.py                                   # data / splits / cache / weights / disk
 
-| 指标 | 值 |
+python scripts/run_5fold.py --exp cv5 --note "5-fold baseline"          # 5 folds, no extras
+python scripts/run_5fold.py --exp cv5_ema --ema                          # + EMA self-distillation
+python scripts/run_5fold.py --exp cv5_mcc --mcc-adaptive                 # + MCC class weighting
+python scripts/run_5fold.py --exp cv5_full --ema --mcc-adaptive          # both
+
+python scripts/list_exps.py                                   # all experiments, one row each
+python scripts/list_exps.py --exp cv5_ema                     # per-fold detail
+```
+
+Single-fold training and evaluation, for debugging:
+
+```bash
+python scripts/train_aip.py --fold 0 --exp dbg --epochs 2
+python scripts/eval_aip.py  --exp dbg --n-boot 200
+```
+
+Prediction with a 5-fold ensemble (ESM is forwarded once, heads are averaged):
+
+```bash
+python scripts/predict.py --runs-dir experiments/cv5/runs --fasta peptides.fasta
+```
+
+### Key options
+
+| Option | Meaning |
 |---|---|
-| AUROC | 0.7336 |
-| AUPR | 0.6089 |
-| MCC（阈值 0.487，验证集选出） | 0.3988 |
-| MCC（阈值 0.5） | 0.4055 |
-| F1 / 准确率 / 精确率 / 召回率 | 0.6682 / 0.6840 / 0.5765 / 0.7946 |
-
-与既有方法对比（同一个 462 条测试集，来自 `tables/aip_compare.xlsx`，只有二分类预测）：
-
-| 方法 | MCC | F1 |
-|---|---|---|
-| **IDPP（现）** | **0.3988** | 0.6682 |
-| PreTP-Stack | 0.3928 | 0.6695 |
-| AIPpred | 0.3854 | 0.6667 |
-| PepNet-Fast | 0.2813 | 0.6220 |
-
-**只领先最强的既有方法 0.006 MCC。** 这是新方案必须面对的现实，见第六节。
+| `--exp NAME` | experiment id; required, `a-z0-9_-`, collisions refused |
+| `--ema` | enable EMA self-distillation (`--ema-alpha`, `--ema-decay`, `--ema-warmup`) |
+| `--mcc-adaptive` | enable MCC-guided class weights (`--mcc-interval`, `--mcc-rate`, `--mcc-ratio`, `--mcc-cooldown`) |
+| `--label-noise 0.1` | flip 10% of *training* labels (audited in `label_noise.json`) to probe robustness |
+| `--device auto` | `auto` → CUDA → MPS → CPU |
+| `--seeds 0,1,2` | model seeds (default `0`) |
 
 ---
 
-## 四、代码
+## Outputs
 
 ```
-scripts/legacy_multitask/     ← 原双任务脚本，仅作参考，不要直接改
-    train.py                   model9_2 版（24,708 B，论文实际用的那份）
-    eval.py                    含 AUROC/AUPR 计算
-    predict_peps.py
-    extract_handcraft_features.py   694 维手工特征
-    models.py                  ESM2 + ResCNN + MLPHead（双头）
-    features.py                AAC/GAAC/DPC/CKSAAGP/PAAC/CTD/理化
-    utils.py
-scripts/make_aip_dataset.py   ← 数据集生成（已可用）
-reference/current_multitask_aip_predictions.csv   旧模型的 462 条 AIP 预测
+experiments/<exp>/
+├── runs/fold0_m0/          best.pt · config.json · threshold.json · train_log.csv
+│                           split.csv · val_probs.csv · test_probs.csv · all_probs.csv
+├── results/                metrics_detail.csv · metrics.json · summary.md
+└── manifest.json           data/split/code SHA-256, environment, settings
 ```
 
-**重构时要改的地方（先记录，不动手）**
-
-1. `models.py`：删掉 `head_pip`，只留 `head_aip`；`MLPHead` 的 hidden 从 512 改回论文声称的"单层"或明确写两层（正文与代码不一致，见待修清单 T06）。
-2. `train.py`：删掉 mask 逻辑（`sup_mask`、`(x*mask).sum/mask.sum` 仍保留——那是序列 padding 用的，不是标注 mask，注意区分）；loss 改为纯 `BCEWithLogitsLoss`。
-3. `train.py`：日志列从 19/23 列减到 8 列左右（epoch、train_loss、val_aupr、val_auroc、val_mcc、lr）。
-4. `eval.py`：输出每个样本的概率（保留），并固定报告 AUROC/AUPR + 至少两个阈值（0.5 与"验证集选出"）下的 MCC。
-5. `train.py`：验证集目前被用四次（选阈值、算 FN/FP、调 class weight、早停）——单任务版本建议至少把"早停"和"选阈值"解耦，否则解释不清。
-6. 数据读取：改成 `sequence,label` 两列。
+`best.pt` holds only the head (80 MB); the frozen ESM backbone is never duplicated.
+The ESM hidden-state cache is built on first use (~900 MB) and deleted when the run
+finishes unless `--keep-cache` is passed.
 
 ---
 
-## 五、必须由你拍板的四件事
+## Repository layout
 
-1. **划分方式**：继续用行级 80/20 随机分层（= 复现旧稿口径），还是改成序列聚类划分（identity ≤ 40%，5 折交叉验证）？
-   - 后者能一次性回答 R1-4/R2-2，但所有数字会变，且不能直接和旧稿对比。
-2. **重复运行**：≥3 seeds 报 mean±sd / 95% CI？还是先单 seed 跑通再说。
-3. **基线口径**：现有对比表只有 0/1 预测，**算不出 AUROC/AUPR**。要补阈值无关指标，必须找到这些方法的概率输出，或自己重跑基线。
-4. **主指标**：AUPR + AUROC 为主、MCC 为辅？（我建议是。）
+```
+src/          config, data_io, features, esm_backbone, model_aip, ema_sat,
+              threshold, metrics, manifest, checkpoint, utils
+scripts/      preflight, make_5fold, cache_esm, train_aip, eval_aip,
+              run_5fold, run_legacy, predict, list_exps, selftest,
+              check_env, convert_legacy_head, make_aip_dataset
+              legacy_multitask/   read-only snapshot of the previous dual-task code
+data/         dataset, fixed splits, statistics
+docs/         installation and platform notes
+plan/         project rationale, decisions, reviewer-comment mapping
+```
+
+`train` and `eval` are deliberately separate processes: the trainer only emits probability
+files, and every metric — threshold-free, at 0.5, at the validation-selected threshold,
+per fold, or for the leave-one-fold-out ensemble — is produced by one implementation in
+`src/metrics.py`.
 
 ---
 
-## 六、风险（直说）
+## Reproducibility notes
 
-- **单任务 AIP 是红海**。AIPpred（2018）、PreTP-Stack、PepNet-Fast 之后还有 2024–2025 的新方法。当前模型只领先 0.006 MCC，靠"我用了 ESM-2"讲不出故事。
-- **EMA-SAT 的动机消失了**。原来讲"标签噪声"，但 AIP 子集实测**零重复、零冲突标签**，没有噪声可鲁棒。它现在只能被当作一个训练技巧（EMA 自蒸馏），需要单独证明它带来多少 AUPR。
-- **方法的"新"变少了**。删掉多任务 + 部分标注 + 双向肽之后，剩下的 EMA-SAT + MCC 加权 + 特征融合，和普通肽预测器的区别需要重新论证。
+- Splits are fixed files with recorded SHA-256; changing the split means creating a new
+  split id, not re-seeding a splitter.
+- `seed_everything` covers Python/NumPy/PyTorch RNGs and enables deterministic cuDNN.
+- Thresholds are selected on the validation split only, and the chosen value is written to
+  `threshold.json` next to the predictions that used it.
+- Expect small numerical differences across CUDA / MPS / CPU; treat CUDA as the reference.
 
-我的建议：这次不要再靠"讲一个新框架"，而是把 AIP 这一侧做成**干净、可复现、指标齐全**的一条线——聚类划分 + 3 seeds + 阈值无关指标 + 新基线。如果这样做了还是只有 +0.006，那说明结论应该是"现有方法差异不显著"，而不是"我们的方法更好"。（这个结论对投稿是不利的，但比被第二轮审稿拆穿要好。）
+---
+
+## Limitations
+
+- Five folds give an estimate of split variance, not training variance; multi-seed runs are
+  supported (`--seeds`) but not yet part of the default protocol.
+- The legacy comparison table only contains binary predictions, so AUROC/AUPR cannot be
+  derived from it — baselines must be re-run with probability outputs for a threshold-free
+  comparison.
+- Model weights are not distributed in this repository.
