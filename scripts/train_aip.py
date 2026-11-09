@@ -15,7 +15,7 @@
     best.pt            80 MB 头
     val_probs.csv      sequence,label,prob      ← 选阈值用
     test_probs.csv     sequence,label,prob      ← 评估用
-    all_probs.csv      全部 4,686 行的概率       ← 供留一折集成估计
+    all_probs.csv      全部 4,686 行的概率       ← 供误差分析 / 外部评估
     train_log.csv      每 epoch 的 loss / val AUPR / EMA 诊断
     threshold.json     验证集搜出的阈值
 

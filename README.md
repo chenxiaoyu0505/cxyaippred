@@ -21,7 +21,7 @@ Given a peptide sequence, predict whether it is anti-inflammatory.
 - **Optional training tricks** (both off by default, both ablatable):
   EMA self-distillation ("EMA-SAT") and MCC-guided class-weight adaptation
 - **Evaluation** — fixed 5-fold splits, threshold-free metrics (AUROC/AUPR) reported
-  alongside thresholded ones, bootstrap CIs, and a leave-one-fold-out ensemble
+  alongside thresholded ones and bootstrap CIs
 
 Two design rules make the numbers auditable:
 
@@ -136,7 +136,7 @@ plan/         project rationale, decisions, reviewer-comment mapping
 
 `train` and `eval` are deliberately separate processes: the trainer only emits probability
 files, and every metric — threshold-free, at 0.5, at the validation-selected threshold,
-per fold, or for the leave-one-fold-out ensemble — is produced by one implementation in
+per fold — is produced by one implementation in
 `src/metrics.py`.
 
 ---

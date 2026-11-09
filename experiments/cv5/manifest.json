@@ -1,0 +1,101 @@
+{
+  "experiment": "cv5",
+  "created": "2026-11-09T17:52:32",
+  "status": "finished",
+  "data": {
+    "file": "data/aip_all.csv",
+    "n": 4686,
+    "pos": 1840,
+    "sha256": "5f3eb4b194eadeb30dfa9a26cc8104df5e52d774369415fb0e49eb4d9acaa78c"
+  },
+  "split": {
+    "file": "data/splits/split_seed42_n5/folds.csv",
+    "sha256": "4b17ee05f73e836363ad7d0973c3c68e30821b8b902167fd7cd151584ceb57f3"
+  },
+  "code": {
+    "src/__init__.py": "997259f1d19c9421",
+    "src/cache_util.py": "22fc3a41e01f98a9",
+    "src/checkpoint.py": "c464ebce128f263c",
+    "src/config.py": "0abb1d2271bc765f",
+    "src/data_io.py": "7293fb07d8a1dedd",
+    "src/ema_sat.py": "9e9287f62b2e02e4",
+    "src/esm_backbone.py": "2c2be2911e75f8fc",
+    "src/features.py": "891ca35ef4687d2e",
+    "src/manifest.py": "f998fac19e1a9a59",
+    "src/metrics.py": "7c4baa57304f86b9",
+    "src/model_aip.py": "be0843fe7f71ed2c",
+    "src/threshold.py": "410a5cb6db988aeb",
+    "src/utils.py": "bde501c6f0a39631",
+    "scripts/cache_esm.py": "04e0da55053ccea2",
+    "scripts/check_env.py": "5b43b8f6757671fd",
+    "scripts/convert_legacy_head.py": "11ad23a813658dd3",
+    "scripts/eval_aip.py": "00f21a8cf22666df",
+    "scripts/list_exps.py": "7772da2c236cdf41",
+    "scripts/make_5fold.py": "834f817b10a7bd5f",
+    "scripts/make_aip_dataset.py": "4789d02759457c18",
+    "scripts/predict.py": "b299f281cf4459ce",
+    "scripts/preflight.py": "2f6f3d8d37e8cd72",
+    "scripts/run_5fold.py": "2cb58fe1d5380cbe",
+    "scripts/run_legacy.py": "8923457d8365ba5d",
+    "scripts/selftest.py": "a3e6257f003f380b",
+    "scripts/train_aip.py": "52e52379cbab68bd",
+    "scripts/legacy_multitask/eval.py": "1964fde29bcfbd45",
+    "scripts/legacy_multitask/extract_handcraft_features.py": "8cc9c176070f7793",
+    "scripts/legacy_multitask/features.py": "891ca35ef4687d2e",
+    "scripts/legacy_multitask/models.py": "464f88a30ceab996",
+    "scripts/legacy_multitask/predict_peps.py": "bcafe2062e86c86e",
+    "scripts/legacy_multitask/train.py": "b2737d2e0d015142",
+    "scripts/legacy_multitask/utils.py": "dfd3405d0bb2232f"
+  },
+  "env": {
+    "python": "3.11.14",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "executable": "D:\\anaconda3\\envs\\esm2_env\\python.exe",
+    "torch": "2.11.0.dev20260107+cu128",
+    "cuda": "12.8",
+    "cuda_available": true,
+    "gpu": "NVIDIA GeForce RTX 5060 Laptop GPU"
+  },
+  "kind": "train_5fold",
+  "split_id": "split_seed42_n5",
+  "folds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "model_seeds": [
+    0
+  ],
+  "n_runs": 5,
+  "skipped_runs": 0,
+  "settings": {
+    "epochs": 50,
+    "batch_size": 16,
+    "lr": 0.0001,
+    "patience": 10,
+    "pos_weight": 0.0,
+    "label_noise": 0.0,
+    "ema": false,
+    "ema_alpha": 0.7,
+    "ema_decay": 0.99,
+    "ema_warmup": 3,
+    "mcc_adaptive": false,
+    "mcc_interval": 3,
+    "mcc_rate": 0.15,
+    "mcc_ratio": 1.2,
+    "mcc_cooldown": 3,
+    "class_weight_min": 0.3,
+    "class_weight_max": 3.0
+  },
+  "note": "5折基线",
+  "configs": [
+    "experiments/cv5/runs/fold0_m0/config.json",
+    "experiments/cv5/runs/fold1_m0/config.json",
+    "experiments/cv5/runs/fold2_m0/config.json",
+    "experiments/cv5/runs/fold3_m0/config.json",
+    "experiments/cv5/runs/fold4_m0/config.json"
+  ],
+  "seconds": 838.5
+}

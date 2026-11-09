@@ -9,12 +9,12 @@
     @val     每折在验证集上搜出的阈值（旧稿用的就是这个，必须公开）
     free     AUROC / AUPR，与阈值无关，**主指标**
 
-两种汇总方式
-------------
-    单折     每个 fold 的模型评自己那一折的 test → 5 个独立估计
-    LOFO集成 评 fold k 时用**除 k 以外**的 4 个模型平均（留一折集成）
-             —— 这才是"部署时用 5 折集成"的诚实估计，因为 fold k 的模型
-                从没见过 fold k 的 test 样本。
+汇总方式
+--------
+    单折     每个 fold 的模型评自己那一折的 test → 5 个独立估计，报 mean ± sd。
+             这是 5 折主结果；不再计算 "5 个 fold 模型集成"。
+             （同一批数据里每条 test 都在另外 4 个模型的训练集中，集成评估
+               必然泄漏；要估集成只能用 external test 或同 fold 多 seed。）
 
 用法
 ----
@@ -93,8 +93,7 @@ def summary_markdown(df, summary, args, runs):
     lines += ['', '## 口径说明', '',
               '- `free`：只用概率，不设阈值（主指标）。',
               '- `@0.5`：固定阈值 0.5，不受任何调参影响。',
-              '- `@val`：每折在验证集上网格搜索 MCC 最大点得到阈值（旧稿口径，须与 `free` 并列报告）。',
-              '- `lofo_ensemble`：评 fold k 时只用没见过它的模型平均（诚实估计部署时的 5 折集成）。']
+              '- `@val`：每折在验证集上网格搜索 MCC 最大点得到阈值（旧稿口径，须与 `free` 并列报告）。']
     return '\n'.join(lines) + '\n'
 
 
@@ -126,7 +125,8 @@ def main():
     ap.add_argument('--runs', default='')
     ap.add_argument('--out', default='')
     ap.add_argument('--n-boot', type=int, default=1000)
-    ap.add_argument('--no-ensemble', action='store_true')
+    ap.add_argument('--no-ensemble', action='store_true',
+                    help='兼容旧命令；当前始终只报单折，不计算集成')
     args = ap.parse_args()
 
     if args.exp:
@@ -152,32 +152,9 @@ def main():
         p = r['test']['prob'].values.astype(float)
         all_rows += rows_for(r, p, y, 'single', args.n_boot, seed=r['fold'] * 100 + r['seed'])
 
-    # ---- 留一折集成 ----
-    ens_rows = []
-    if not args.no_ensemble and len(runs) > 1:
-        by_fold = {}
-        for r in runs:
-            by_fold.setdefault(r['fold'], []).append(r)
-        for k, rs in sorted(by_fold.items()):
-            others = [r for r in runs if r['fold'] != k]
-            if not others:
-                continue
-            # 以 fold k 的 test 行为准，从各模型的 all_probs 取同 row
-            base = rs[0]['test']
-            rows = base['row'].values
-            probs = []
-            for o in others:
-                m = o['all'].set_index('row')['prob']
-                probs.append(m.reindex(rows).values)
-            P = np.vstack(probs)
-            p_ens = P.mean(axis=0)
-            y = base['label'].values.astype(int)
-            meta = {'fold': k, 'seed': -1, 'threshold': rs[0]['threshold']}
-            ens_rows += rows_for(meta, p_ens, y, 'lofo_ensemble', args.n_boot, seed=k)
-            print('  LOFO fold %d：%d 个模型平均，%d 条 test' % (k, len(others), len(rows)))
-
     # ---- 落盘 ----
-    df = pd.DataFrame(all_rows + ens_rows)
+    # 只报单折。5 个 fold 模型在彼此 test 上的集成无法无偏估计（见文件头说明）。
+    df = pd.DataFrame(all_rows)
     df.to_csv(os.path.join(out_dir, 'metrics_detail.csv'), index=False)
 
     summary = {}

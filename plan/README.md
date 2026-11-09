@@ -127,13 +127,13 @@ experiments\<exp>\
 * ESM-2 **不进权重文件**，只在 meta 里记名字 `facebook/esm2_t33_650M_UR50D` 与层号 `-1`。
 * 文件格式见 `src/checkpoint.py`（`format = cxyaippred-aip-head-v1`）。
 
-**推理形态（已定）：5 折集成。** ESM 只前向一次，然后分别过 5 个头，取平均概率；
+**推理形态（已定）：5 折集成。**（部署形态；CV 评估只报单折，不能在同一批数据上估 5 模型集成。）ESM 只前向一次，然后分别过 5 个头，取平均概率；
 同时输出折间标准差（分歧大 = 该序列可能落在训练分布外）。
 不输出 0/1，除非显式给阈值。
 
 ---
 
-## 5. 现状（2026-11-09 15:20）
+## 5. 现状（2026-11-09 18:40）
 
 ### 已完成
 
@@ -145,18 +145,21 @@ experiments\<exp>\
 - [x] 自检 `scripts/selftest.py`（前向形状、变长掩码、round-trip、体积、拒绝非法格式、694 维）
 - [x] 旧权重迁移工具 `scripts/convert_legacy_head.py`（2.51 GB → 80 MB，已完成一次验证）
 - [x] **训练 `scripts/train_aip.py`**（EMA-SAT 可开关、按 val AUPR 早停、val 上选阈值）
-- [x] **评估 `scripts/eval_aip.py`**（free/@0.5/@val 三口径 + bootstrap CI + 留一折集成）
+- [x] **评估 `scripts/eval_aip.py`**（free/@0.5/@val 三口径 + bootstrap CI，只报单折）
 - [x] **统筹 `scripts/run_5fold.py`**（自动建划分→建缓存→5 折训练→评估→写 manifest→删缓存）
 - [x] **对照 `scripts/run_legacy.py`**（原 4,224 训练 / 462 测试，用于和外部基线并表）
 - [x] 指标唯一实现 `src/metrics.py`（train 只产概率、eval 才算指标）
 - [x] 端到端冒烟：`--exp smoketest` 跑通 1 epoch + 评估（已删除该冒烟产物）
+- [x] 命令行 `--label-noise`（默认 0）：训练行对称翻转标签，逐条记录到 `label_noise.json`
+- [x] 中文 README（`README.zh-CN.md`）与英文版互链
+- [x] **`cv5` 5 折基线**（2026-11-09 17:52 完成）：AUROC 0.7277 ± 0.0130 / AUPR 0.6494 ± 0.0103 / MCC@val 0.3580 ± 0.0259；结果在 `experiments/cv5/results/`，详见 `plan/RUNS.md`
 
 ### 没做
 
-- [ ] **没有跑过任何一次真实训练，没有任何新数字**（`experiments/` 现在是空的）
-- [ ] 真实 ESM 缓存（约 0.9 GB）尚未生成
+- [ ] 除 cv5 外没有任何实验（EMA / MCC / 噪声梯度 / legacy 对照均未跑）
 - [ ] 模型创新（用户 2026-11-09 说"准备好了我们再看看模型如何创新"）
 - [ ] 论文文本的对应修改（另一条线，见 `D:\BIP\module4\BIB\待修问题清单_1109.md`）
+- [ ] `plan/RUNS.md` 之外的 run 台账尚未建立（每次跑完必须补一行）
 
 ---
 

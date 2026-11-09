@@ -1,0 +1,2 @@
+﻿exp,created,status,note,ema,ema_alpha,mcc_adaptive,epochs,folds,seeds,n_runs,auroc,aupr,mcc_val,path
+cv5,2026-11-09 17:52:35,finished,5折基线,0,,0,50,5,1,5,0.7277±0.0130,0.6494±0.0103,0.3580±0.0259,experiments/cv5
