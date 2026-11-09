@@ -137,7 +137,8 @@ def main():
     ap.add_argument('--ema-alpha', type=float, default=0.7)
     ap.add_argument('--ema-decay', type=float, default=0.99)
     ap.add_argument('--ema-warmup', type=int, default=3)
-    ap.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
+    ap.add_argument('--device', default='auto',
+                    help='auto/cuda/mps/cpu，默认自动选择')
     ap.add_argument('--run-name', default='', help='默认 fold{k}_{split_id}_m{seed}')
     ap.add_argument('--overwrite', action='store_true', help='run 目录已存在时覆盖')
     ap.add_argument('--quiet', action='store_true')

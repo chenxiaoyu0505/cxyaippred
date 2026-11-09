@@ -31,11 +31,36 @@ def seed_everything(seed):
     torch.backends.cudnn.benchmark = False
 
 
-def pick_device(want='cuda'):
+def pick_device(want='auto'):
+    """
+    统一入口，三平台通用：
+
+        auto → cuda > mps(Apple Silicon) > cpu
+        显式给 cuda / mps / cpu 则尽量照办，不可用时退回 cpu 并打印警告
+
+    注意 MPS 上个别算子仍不完整，遇到报错就显式 --device cpu。
+    """
     import torch
 
-    if want == 'cuda' and not torch.cuda.is_available():
+    want = (want or 'auto').lower()
+    has_cuda = torch.cuda.is_available()
+    has_mps = bool(getattr(torch.backends, 'mps', None)
+                   and torch.backends.mps.is_available())
+
+    if want == 'auto':
+        if has_cuda:
+            return torch.device('cuda')
+        if has_mps:
+            print('[info] 未检测到 CUDA，使用 Apple MPS')
+            return torch.device('mps')
+        print('[info] 未检测到加速器，使用 CPU（会很慢，但能跑通）')
+        return torch.device('cpu')
+
+    if want.startswith('cuda') and not has_cuda:
         print('[warn] CUDA 不可用，退回 CPU')
+        return torch.device('cpu')
+    if want == 'mps' and not has_mps:
+        print('[warn] MPS 不可用，退回 CPU')
         return torch.device('cpu')
     return torch.device(want)
 

@@ -36,6 +36,7 @@ sys.path.insert(0, ROOT)
 
 from src.checkpoint import load_head            # noqa: E402
 from src.features import compute_handcraft      # noqa: E402
+from src.utils import pick_device               # noqa: E402
 
 MAX_LEN = 1024
 
@@ -85,10 +86,12 @@ def main():
     ap.add_argument('--weights', default='', help='逗号分隔的 .pt / 目录 / glob；默认 runs/fold*/*.pt')
     ap.add_argument('--runs-dir', default=os.path.join(ROOT, 'runs'))
     ap.add_argument('--batch-size', type=int, default=8)
-    ap.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
+    ap.add_argument('--device', default='auto',
+                    help='auto/cuda/mps/cpu，默认自动选择')
     ap.add_argument('--threshold', type=float, default=None, help='给了就额外输出 pred 列')
     ap.add_argument('--esm-name', default='facebook/esm2_t33_650M_UR50D')
     args = ap.parse_args()
+    args.device = pick_device(args.device)
 
     paths = collect_weights(os.path.join(args.runs_dir, '*'), args.weights)
     if not paths:

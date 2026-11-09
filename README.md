@@ -1,6 +1,26 @@
 # cxyaippred —— 单任务 AIP 预测（重新起步）
 
-这个目录是为"放弃双任务、只做抗炎肽（AIP）预测"准备的新工程。**目前只做整理，代码还没重构。**
+这个目录是"放弃双任务、只做抗炎肽（AIP）预测"的新工程。**代码已完成并通过自检，尚未跑真实训练。**
+
+---
+
+## 快速开始
+
+```bash
+conda env create -f environment.yml && conda activate cxyaippred
+pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128   # 或 pip install torch (Mac)
+python scripts/check_env.py     # 真跑一次 GPU 卷积，确认真能用
+python scripts/preflight.py     # 数据/划分/缓存/权重/磁盘
+python scripts/run_5fold.py --exp cv5 --note "5折主实验"
+python scripts/list_exps.py     # 看所有实验与主指标
+```
+
+Windows / macOS / Linux 的差异、Mac 上 MPS 的注意事项、各平台预期耗时见 **[docs/INSTALL.md](docs/INSTALL.md)**。
+
+设计上的两条硬规则：
+
+- **train 只产概率，eval 才算指标**——同一指标不会出现两个数（原稿 Fig 3 的 PIP MCC 0.3123 与 Table 2 的 0.3497 就是这么来的）；
+- **一个实验一个目录**（`experiments/<exp>/`），`--exp` 必填且重名会被拒绝，避免参数混写。
 
 ---
 

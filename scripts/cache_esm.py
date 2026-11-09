@@ -47,7 +47,8 @@ def main():
     ap.add_argument('--esm-name', default='facebook/esm2_t33_650M_UR50D')
     ap.add_argument('--layer', type=int, default=-1)
     ap.add_argument('--batch-size', type=int, default=16)
-    ap.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
+    ap.add_argument('--device', default='auto',
+                    help='auto/cuda/mps/cpu，默认自动选择')
     ap.add_argument('--force', action='store_true')
     ap.add_argument('--clean', action='store_true', help='只删除缓存，不生成')
     args = ap.parse_args()

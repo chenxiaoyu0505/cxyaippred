@@ -20,12 +20,14 @@ import torch
 
 
 class ESMBackbone:
-    def __init__(self, name='facebook/esm2_t33_650M_UR50D', device='cuda',
+    def __init__(self, name='facebook/esm2_t33_650M_UR50D', device='auto',
                  layer=-1, max_len=1024):
         from transformers import AutoModel, AutoTokenizer
 
+        from .utils import pick_device
+
         self.name = name
-        self.device = torch.device(device if torch.cuda.is_available() or device == 'cpu' else 'cpu')
+        self.device = pick_device(device)
         self.layer = layer
         self.max_len = max_len
 
