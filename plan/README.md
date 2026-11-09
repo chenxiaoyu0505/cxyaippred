@@ -153,10 +153,11 @@ experiments\<exp>\
 - [x] 命令行 `--label-noise`（默认 0）：训练行对称翻转标签，逐条记录到 `label_noise.json`
 - [x] 中文 README（`README.zh-CN.md`）与英文版互链
 - [x] **`cv5` 5 折基线**（2026-11-09 17:52 完成）：AUROC 0.7277 ± 0.0130 / AUPR 0.6494 ± 0.0103 / MCC@val 0.3580 ± 0.0259；结果在 `experiments/cv5/results/`，详见 `plan/RUNS.md`
+- [x] **`cv5_full` 5 折（EMA+MCC）**（2026-11-09 19:03 完成）：AUROC 0.7316 ± 0.0060 / AUPR 0.6525 ± 0.0049；但 MCC@0.5 降至 0.2505、ECE 升至 0.182，需拆分 EMA/MCC
 
 ### 没做
 
-- [ ] 除 cv5 外没有任何实验（EMA / MCC / 噪声梯度 / legacy 对照均未跑）
+- [ ] 除 `cv5` / `cv5_full` 外没有其他实验；EMA 与 MCC 尚未单独拆分（噪声梯度 / legacy 对照均未跑）
 - [ ] 模型创新（用户 2026-11-09 说"准备好了我们再看看模型如何创新"）
 - [ ] 论文文本的对应修改（另一条线，见 `D:\BIP\module4\BIB\待修问题清单_1109.md`）
 - [ ] `plan/RUNS.md` 之外的 run 台账尚未建立（每次跑完必须补一行）
