@@ -6,6 +6,8 @@ reproducible benchmarking rather than leaderboard chasing.
 
 **Status:** code complete and self-tested; no production training run yet in this repository.
 
+English | [中文](README.zh-CN.md)
+
 ---
 
 ## What it does
