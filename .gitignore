@@ -1,0 +1,31 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini
+
+# ---- 缓存与中间产物（可重建，不入库）----
+_work/
+cache/
+*.npy
+*.pt
+*.pth
+*.log
+
+# ---- 权重与运行产物（体积大，按需发布）----
+models/
+heads/*.pt
+experiments/*/runs/
+experiments/*/results/
+
+# 但保留说明文件
+!experiments/README.md
+!heads/README.md
+!models/README.md
+!runs/README.md

@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+单折训练：训练 AIPHead，**只产出概率，不产出指标**。
+
+为什么不算指标
+--------------
+指标一律由 `scripts/eval_aip.py` 从落盘的 `test_probs.csv` 重算。
+这样"同一个指标两个数"在物理上不可能发生（旧稿 Fig 3 vs Table 2 的教训）。
+
+产物（runs/<run_name>/）
+-----------------------
+    config.json        全部超参快照
+    split.csv          本次用到的 train/val/test 行（自带证据）
+    best.pt            80 MB 头
+    val_probs.csv      sequence,label,prob      ← 选阈值用
+    test_probs.csv     sequence,label,prob      ← 评估用
+    all_probs.csv      全部 4,686 行的概率       ← 供留一折集成估计
+    train_log.csv      每 epoch 的 loss / val AUPR / EMA 诊断
+    threshold.json     验证集搜出的阈值
+
+用法
+----
+    python scripts/train_aip.py --fold 0 --seed 0
+    python scripts/train_aip.py --fold 0 --seed 0 --ema --pos-weight 3.0
+    python scripts/train_aip.py --fold 2 --seed 1 --epochs 60 --out runs
+"""
+import argparse
+import os
+import sys
+import time
+
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn.functional as F
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
+
+from src.checkpoint import save_head                       # noqa: E402
+from src.config import RunCfg                              # noqa: E402
+from src.data_io import (hand_feats, iter_batches, load_esm_cache,  # noqa: E402
+                         load_folds, load_table)
+from src.ema_sat import EMASAT                             # noqa: E402
+from src.manifest import sha256_file                       # noqa: E402
+from src.metrics import confusion, threshold_free            # noqa: E402
+from src.model_aip import AIPHead                          # noqa: E402
+from src.threshold import search_best_mcc                  # noqa: E402
+from src.utils import ensure_dir, pick_device, save_json, seed_everything  # noqa: E402
+
+
+# ---------------------------------------------------------------- 预测
+
+@torch.no_grad()
+def predict_ordered(head, idx, emb, mask, hand, device, batch_size=64):
+    """按 idx 的原始顺序返回概率（不重排）"""
+    head.eval()
+    out = np.zeros(len(idx), dtype=np.float64)
+    for s in range(0, len(idx), batch_size):
+        b = idx[s:s + batch_size]
+        h = torch.from_numpy(np.asarray(emb[b], dtype=np.float32)).to(device)
+        m = torch.from_numpy(np.asarray(mask[b])).to(device).float()
+        hf = torch.from_numpy(hand[b]).to(device)
+        out[s:s + len(b)] = torch.sigmoid(head(h, m, hf)).cpu().numpy()
+    return out
+
+
+# ---------------------------------------------------------------- 训练一步
+
+def train_epoch(head, opt, sat, tr_idx, emb, mask, hand, y, cfg, device,
+                pos_weight=None, cls_w=None):
+    """cls_w = (w_pos, w_neg)：逐样本的类权重；None = 不加权"""
+    head.train()
+    perm_rng = np.random.RandomState(cfg.train.seed * 1000 + sat.epoch)
+    order = tr_idx[perm_rng.permutation(len(tr_idx))]
+    total, n_seen = 0.0, 0
+
+    for b in iter_batches(order, cfg.train.batch_size, shuffle=False):
+        h = torch.from_numpy(np.asarray(emb[b], dtype=np.float32)).to(device)
+        m = torch.from_numpy(np.asarray(mask[b])).to(device).float()
+        hf = torch.from_numpy(hand[b]).to(device)
+        yb = torch.from_numpy(y[b]).to(device)
+
+        logits = head(h, m, hf)
+        target = sat.targets(b, yb).to(device)
+        wb = None
+        if cls_w is not None:
+            # 正负类各自的阈值权重（MCC 自适应会改它）
+            wb = torch.where(yb > 0.5,
+                             torch.full_like(yb, float(cls_w[0])),
+                             torch.full_like(yb, float(cls_w[1])))
+        loss = F.binary_cross_entropy_with_logits(logits, target, weight=wb,
+                                                  pos_weight=pos_weight)
+
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        if cfg.train.grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(head.parameters(), cfg.train.grad_clip)
+        opt.step()
+
+        sat.update(b, torch.sigmoid(logits.detach()))
+        total += float(loss.item()) * len(b)
+        n_seen += len(b)
+
+    return total / max(n_seen, 1)
+
+
+# ---------------------------------------------------------------- 主流程
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--data', default=os.path.join(ROOT, 'data', 'aip_all.csv'))
+    ap.add_argument('--folds', default='', help='默认 data/splits/<split-id>/folds.csv')
+    ap.add_argument('--split-id', default='split_seed42_n5')
+    ap.add_argument('--cache-dir', default=os.path.join(ROOT, 'cache'))
+    ap.add_argument('--exp', default='', help='实验名：产物写 experiments/<exp>/runs/')
+    ap.add_argument('--out', default='', help='显式指定 run 的父目录（优先于 --exp）')
+    ap.add_argument('--fold', type=int, required=True)
+    ap.add_argument('--seed', type=int, default=0, help='model seed（初始化/打乱/dropout）')
+    ap.add_argument('--epochs', type=int, default=50)
+    ap.add_argument('--batch-size', type=int, default=16)
+    ap.add_argument('--lr', type=float, default=1e-4)
+    ap.add_argument('--weight-decay', type=float, default=0.0)
+    ap.add_argument('--patience', type=int, default=10)
+    ap.add_argument('--pos-weight', type=float, default=0.0)
+    ap.add_argument('--mcc-adaptive', action='store_true',
+                    help='启用 MCC 引导的类权重自适应（旧 IDPP 机制；依赖验证集）')
+    ap.add_argument('--mcc-interval', type=int, default=3)
+    ap.add_argument('--mcc-rate', type=float, default=0.15)
+    ap.add_argument('--class-weight-max', type=float, default=3.0)
+    ap.add_argument('--class-weight-min', type=float, default=0.3)
+    ap.add_argument('--mcc-ratio', type=float, default=1.2)
+    ap.add_argument('--mcc-cooldown', type=int, default=3)
+    ap.add_argument('--ema', action='store_true', help='启用 EMA-SAT')
+    ap.add_argument('--ema-alpha', type=float, default=0.7)
+    ap.add_argument('--ema-decay', type=float, default=0.99)
+    ap.add_argument('--ema-warmup', type=int, default=3)
+    ap.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
+    ap.add_argument('--run-name', default='', help='默认 fold{k}_{split_id}_m{seed}')
+    ap.add_argument('--overwrite', action='store_true', help='run 目录已存在时覆盖')
+    ap.add_argument('--quiet', action='store_true')
+    args = ap.parse_args()
+
+    cfg = RunCfg(fold=args.fold, exp=args.exp)
+    cfg.data.data_csv = args.data
+    cfg.data.split_id = args.split_id
+    cfg.data.folds_csv = args.folds or os.path.join(
+        ROOT, 'data', 'splits', args.split_id, 'folds.csv')
+    cfg.data.cache_dir = args.cache_dir
+    cfg.train.seed = args.seed
+    cfg.train.epochs = args.epochs
+    cfg.train.batch_size = args.batch_size
+    cfg.train.lr = args.lr
+    cfg.train.weight_decay = args.weight_decay
+    cfg.train.patience = args.patience
+    cfg.train.pos_weight = args.pos_weight
+    cfg.train.mcc_adaptive = args.mcc_adaptive
+    cfg.train.mcc_interval = args.mcc_interval
+    cfg.train.mcc_rate = args.mcc_rate
+    cfg.train.class_weight_max = args.class_weight_max
+    cfg.train.class_weight_min = args.class_weight_min
+    cfg.train.mcc_ratio = args.mcc_ratio
+    cfg.train.mcc_cooldown = args.mcc_cooldown
+    cfg.train.device = args.device
+    cfg.ema.enabled = args.ema
+    cfg.ema.alpha = args.ema_alpha
+    cfg.ema.decay = args.ema_decay
+    cfg.ema.warmup_epochs = args.ema_warmup
+
+    run_name = args.run_name or cfg.run_name()
+    if args.out:
+        out_dir_base = args.out
+    elif args.exp:
+        out_dir_base = os.path.join(ROOT, 'experiments', args.exp, 'runs')
+    else:
+        # 不再往顶层 runs/ 写：产物必须归属某个实验，否则又回到"谁覆盖谁说不清"
+        raise SystemExit('必须给 --exp（写到 experiments/<exp>/runs/）或 --out（显式目录）')
+    run_dir = os.path.join(out_dir_base, run_name)
+    if os.path.isdir(run_dir) and os.listdir(run_dir) and not args.overwrite:
+        raise SystemExit(
+            'run 目录已存在且非空：%s\n'
+            '换一个 --exp / --run-name，或加 --overwrite 明确覆盖。' % run_dir)
+    ensure_dir(run_dir)
+    device = pick_device(cfg.train.device)
+    seed_everything(cfg.train.seed)
+
+    # ---- 数据 ----
+    table = load_table(cfg.data.data_csv)
+    cfg.data.split_sha256 = sha256_file(cfg.data.folds_csv)
+    y = table['label'].values.astype(np.float32)
+    folds = load_folds(cfg.data.folds_csv, cfg.fold, table)
+    hand = hand_feats(table, cfg.data.cache_dir)
+    emb, mask = load_esm_cache(cfg.data.cache_dir, table)
+
+    n = len(table)
+    print('[%s] 数据 %d | train %d / val %d / test %d | 阳性率 %.3f'
+          % (run_name, n, len(folds['train']), len(folds['val']), len(folds['test']),
+             float(y.mean())))
+    print('[%s] %s' % (run_name, cfg.diff()))
+
+    cfg.save(os.path.join(run_dir, 'config.json'))
+    split_rows = pd.concat([
+        pd.DataFrame({'sequence': table['sequence'].values[idx],
+                      'label': table['label'].values[idx],
+                      'row': idx, 'split': sp})
+        for sp, idx in folds.items()
+    ], ignore_index=True)
+    split_rows.to_csv(os.path.join(run_dir, 'split.csv'), index=False)
+
+    # ---- 模型 ----
+    head = AIPHead(embed_dim=cfg.model.embed_dim, hand_dim=cfg.model.hand_dim,
+                   hidden=cfg.model.hidden, n_res=cfg.model.n_res,
+                   cnn_drop=cfg.model.cnn_drop, mlp_drop=cfg.model.mlp_drop).to(device)
+    opt = torch.optim.Adam(head.parameters(), lr=cfg.train.lr,
+                           weight_decay=cfg.train.weight_decay)
+    sat = EMASAT(n, alpha=cfg.ema.alpha, decay=cfg.ema.decay,
+                 warmup_epochs=cfg.ema.warmup_epochs, enabled=cfg.ema.enabled)
+    pos_weight = torch.tensor([cfg.train.pos_weight], device=device) \
+        if cfg.train.pos_weight > 0 else None
+
+    best_aupr, best_epoch, best_state = -1.0, -1, None
+    log_rows = []
+    t0 = time.time()
+
+    # MCC 自适应类权重（默认关）：w = (w_pos, w_neg)，初始 1.0/1.0
+    cls_w = [1.0, 1.0]
+    w_hist = [{'epoch': -1, 'w_pos': 1.0, 'w_neg': 1.0}]
+    cooldown = 0
+
+    for epoch in range(cfg.train.epochs):
+        sat.set_epoch(epoch)
+        loss = train_epoch(head, opt, sat, folds['train'], emb, mask, hand, y,
+                           cfg, device, pos_weight,
+                           tuple(cls_w) if cfg.train.mcc_adaptive else None)
+
+        val_p = predict_ordered(head, folds['val'], emb, mask, hand, device,
+                                cfg.train.batch_size)
+        val_aupr = threshold_free(y[folds['val']], val_p)['aupr']
+        val_auc = threshold_free(y[folds['val']], val_p)['auroc']
+        st = sat.stats()
+
+        row = {'epoch': epoch, 'train_loss': loss, 'val_aupr': val_aupr,
+               'val_auroc': val_auc, 'ema_mean': st['ema_mean'],
+               'ema_std': st['ema_std'], 'ema_seen': st['seen'],
+               'ema_active': int(sat.active), 'seconds': round(time.time() - t0, 1)}
+
+        # ---- MCC 引导的类权重调整（只看验证集；与早停、选阈值一起构成"val 多用"）----
+        if cfg.train.mcc_adaptive:
+            yv = y[folds['val']]
+            thr_ep = search_best_mcc(yv, val_p, cfg.threshold.lo,
+                                     cfg.threshold.hi, cfg.threshold.n)['threshold']
+            tp, fp, fn, tn = confusion(yv, val_p, thr_ep)
+            fn_rate = fn / max(fn + tp, 1)
+            fp_rate = fp / max(fp + tn, 1)
+            row.update({'thr_val': thr_ep, 'fn_rate': fn_rate,
+                        'fp_rate': fp_rate, 'w_pos': cls_w[0], 'w_neg': cls_w[1]})
+            if epoch % cfg.train.mcc_interval == 0 and cooldown == 0:
+                act = ''
+                if fn_rate > fp_rate * cfg.train.mcc_ratio:      # 漏检为主 → 抬正类
+                    cls_w[0] = min(cfg.train.class_weight_max,
+                                   cls_w[0] * (1 + cfg.train.mcc_rate))
+                    cls_w[1] = max(cfg.train.class_weight_min,
+                                   cls_w[1] * (1 - 0.3 * cfg.train.mcc_rate))
+                    act = 'pos+'
+                elif fp_rate > fn_rate * cfg.train.mcc_ratio:    # 误报为主 → 抬负类
+                    cls_w[1] = min(cfg.train.class_weight_max,
+                                   cls_w[1] * (1 + cfg.train.mcc_rate))
+                    cls_w[0] = max(cfg.train.class_weight_min,
+                                   cls_w[0] * (1 - 0.3 * cfg.train.mcc_rate))
+                    act = 'neg+'
+                if act:
+                    cooldown = cfg.train.mcc_cooldown
+                    w_hist.append({'epoch': epoch, 'what': act,
+                                   'w_pos': round(cls_w[0], 4),
+                                   'w_neg': round(cls_w[1], 4),
+                                   'fn_rate': round(fn_rate, 4),
+                                   'fp_rate': round(fp_rate, 4)})
+                    if not args.quiet:
+                        print('\n  [w] ep%02d %s → pos %.3f / neg %.3f (fn %.3f fp %.3f)'
+                              % (epoch, act, cls_w[0], cls_w[1], fn_rate, fp_rate))
+                else:
+                    cooldown = 0
+            if cooldown > 0:
+                cooldown -= 1
+
+        log_rows.append(row)
+        if not args.quiet:
+            print('  ep%02d loss %.4f | val AUPR %.4f AUROC %.4f | ema %.3f±%.3f%s'
+                  % (epoch, loss, val_aupr, val_auc, st['ema_mean'], st['ema_std'],
+                     '' if sat.active else ' (warmup)'), end='\r')
+
+        if val_aupr > best_aupr:
+            best_aupr, best_epoch = val_aupr, epoch
+            best_state = {k: v.detach().cpu().clone() for k, v in head.state_dict().items()}
+        elif epoch - best_epoch >= cfg.train.patience:
+            print('\n[%s] 早停于 ep%d（最优 ep%d, val AUPR %.4f）'
+                  % (run_name, epoch, best_epoch, best_aupr))
+            break
+
+    head.load_state_dict(best_state)
+    print('\n[%s] 训练完毕：最优 ep%d, val AUPR %.4f, 用时 %.0fs'
+          % (run_name, best_epoch, best_aupr, time.time() - t0))
+
+    # ---- 落盘：概率 ----
+    all_p = predict_ordered(head, np.arange(n), emb, mask, hand, device,
+                            max(cfg.train.batch_size, 64))
+    val_p = all_p[folds['val']]
+    test_p = all_p[folds['test']]
+
+    thr = search_best_mcc(y[folds['val']], val_p, cfg.threshold.lo,
+                          cfg.threshold.hi, cfg.threshold.n)
+    save_json({'split_id': cfg.data.split_id, 'fold': cfg.fold,
+               'model_seed': cfg.train.seed,
+               'split_sha256': cfg.data.split_sha256,
+               'ema': bool(cfg.ema.enabled),
+               'mcc_adaptive': bool(cfg.train.mcc_adaptive),
+               'class_weights': {'w_pos': round(cls_w[0], 6),
+                                 'w_neg': round(cls_w[1], 6)},
+               'best_epoch': best_epoch, 'val_aupr': best_aupr, **thr},
+              os.path.join(run_dir, 'threshold.json'))
+
+    pd.DataFrame({'sequence': table['sequence'].values[folds['val']],
+                  'label': table['label'].values[folds['val']],
+                  'row': folds['val'], 'prob': val_p}
+                 ).to_csv(os.path.join(run_dir, 'val_probs.csv'), index=False)
+    pd.DataFrame({'sequence': table['sequence'].values[folds['test']],
+                  'label': table['label'].values[folds['test']],
+                  'row': folds['test'], 'prob': test_p}
+                 ).to_csv(os.path.join(run_dir, 'test_probs.csv'), index=False)
+    pd.DataFrame({'row': np.arange(n), 'label': table['label'].values, 'prob': all_p}
+                 ).to_csv(os.path.join(run_dir, 'all_probs.csv'), index=False)
+    pd.DataFrame(log_rows).to_csv(os.path.join(run_dir, 'train_log.csv'), index=False)
+
+    # MCC 自适应：把权重轨迹单独存一份，方便审稿人核对"权重到底怎么动的"
+    if cfg.train.mcc_adaptive:
+        save_json({'enabled': True, 'interval': cfg.train.mcc_interval,
+                   'rate': cfg.train.mcc_rate, 'ratio': cfg.train.mcc_ratio,
+                   'bounds': [cfg.train.class_weight_min, cfg.train.class_weight_max],
+                   'final': {'w_pos': round(cls_w[0], 6), 'w_neg': round(cls_w[1], 6)},
+                   'history': w_hist},
+                  os.path.join(run_dir, 'class_weights.json'))
+        print('[%s] 类权重轨迹：pos %.3f / neg %.3f（%d 次调整）'
+              % (run_name, cls_w[0], cls_w[1], len(w_hist) - 1))
+
+    save_head(head, os.path.join(run_dir, 'best.pt'), {
+        'fold': cfg.fold, 'seed': cfg.train.seed,
+        'threshold': thr['threshold'], 'val_aupr': best_aupr,
+        'split_id': cfg.data.split_id,
+        'train_data': os.path.basename(cfg.data.folds_csv),
+        'note': 'single-task AIP head; metrics computed by eval_aip.py',
+    })
+
+    print('[%s] val 阈值 %.3f (val MCC %.4f) | 产物：%s'
+          % (run_name, thr['threshold'], thr['mcc'], run_dir))
+    nxt = ('--exp %s' % args.exp) if args.exp else ('--runs "%s"' % out_dir_base)
+    print('[%s] 下一步：python scripts/eval_aip.py %s' % (run_name, nxt))
+
+
+if __name__ == '__main__':
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+    main()
