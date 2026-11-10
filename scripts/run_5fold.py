@@ -137,7 +137,7 @@ def main():
     ap.add_argument('--ema-decay', type=float, default=0.65)
     ap.add_argument('--ema-start-epoch', type=int, default=2)
     ap.add_argument('--ema-tau', type=float, default=1.0,
-                    help='α 指数饱和时间常数；越小下降越快')
+                    help='α 半衰期（epoch）；1.0 即每轮减半')
     ap.add_argument('--device', default='')
     ap.add_argument('--cache-dir', default='', help='ESM 缓存目录，默认 <root>/cache；'
                                                    '调试时可指向 _work\\fakecache')

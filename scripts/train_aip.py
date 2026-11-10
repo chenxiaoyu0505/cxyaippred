@@ -127,7 +127,7 @@ def main():
     ap.add_argument('--ema-start-epoch', type=int, default=2,
                     help='从该 epoch 起使用教师；上一轮末初始化 q')
     ap.add_argument('--ema-tau', type=float, default=1.0,
-                    help='α 指数饱和时间常数；越小下降越快')
+                    help='α 半衰期（epoch）；1.0 即每轮减半')
     ap.add_argument('--device', default='auto',
                     help='auto/cuda/mps/cpu，默认自动选择')
     ap.add_argument('--run-name', default='', help='默认 fold{k}_{split_id}_m{seed}')

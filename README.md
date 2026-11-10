@@ -101,8 +101,8 @@ python scripts/predict.py --runs-dir experiments/cv5/runs --fasta peptides.fasta
 
 `--ema-alpha-min` is the hard-label weight floor, not the teacher weight:
 0.7 means the target is eventually 70% hard label / 30% teacher.
-The weight follows `α_e = α_min + (1 − α_min)·exp(−(e − start + 1)/τ)`,
-so it drops quickly for the first few epochs and then asymptotes to 0.7
+The weight follows `α_e = α_min + (1 − α_min)·2^(−max(0, e − start + 1)/τ)`,
+so it halves each epoch when `τ=1`, then asymptotes to 0.7
 (teacher weight `β_e = 1 − α_e` asymptotes to 0.3).
 
 ---

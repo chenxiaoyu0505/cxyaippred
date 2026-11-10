@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """EMA-SAT 教师状态与非线性硬标签权重计划的行为测试。"""
-import math
 import unittest
 
 import numpy as np
@@ -41,24 +40,23 @@ class TestEMASAT(unittest.TestCase):
         sat.update([0], [0.9])
         self.assertTrue(bool(sat.seen[0]))
 
-    def test_exponential_alpha_schedule(self):
-        """α 应从 1 指数下降，渐近逼近 alpha_min；β=1−α。"""
+    def test_halving_alpha_schedule(self):
+        """α 应从 1 开始每轮减半地逼近 alpha_min；β=1−α。"""
         sat = EMASAT(1, alpha_min=0.7, decay=0.65, start_epoch=2, tau=1.0)
         sat.set_epoch(1)
         sat.update([0], [0.5])
         sat.set_epoch(2)
-        alpha2 = 0.7 + 0.3 * math.exp(-1.0)
-        beta2 = 1.0 - alpha2
+        alpha2 = 0.85
+        beta2 = 0.15
         self.assertAlmostEqual(sat.alpha_at(), alpha2, places=6)
         self.assertAlmostEqual(sat.beta_at(), beta2, places=6)
         soft = sat.targets([0], np.array([1.0], dtype=np.float32))
         self.assertAlmostEqual(float(soft[0]), alpha2 * 1.0 + (1.0 - alpha2) * 0.5,
                                places=6)
         sat.set_epoch(3)
-        alpha3 = 0.7 + 0.3 * math.exp(-2.0)
+        alpha3 = 0.775
         self.assertAlmostEqual(sat.alpha_at(), alpha3, places=6)
         self.assertGreater(alpha2, alpha3)
-        self.assertLess(alpha3, alpha2)
         self.assertGreater(alpha3, 0.7)
 
     def test_alpha_decreases_beta_increases_to_limits(self):

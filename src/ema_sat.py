@@ -10,13 +10,14 @@ EMA-SAT（自自适应训练）的教师目标。
 
 α_e 是**硬标签权重**，不是教师权重。它从 1 开始，在 start_epoch
 之后快速下降并渐近逼近 α_min（默认 0.7）；等价地，教师权重
-β_e = 1 − α_e 从 0 快速上升并渐近逼近 0.3。这里采用指数饱和：
+β_e = 1 − α_e 从 0 快速上升并渐近逼近 0.3。这里采用以 2 为底的
+指数饱和（τ=1 时每轮减半）：
 
-    α_e = α_min + (1 − α_min) · exp(−(e − start_epoch + 1) / τ)
+    α_e = α_min + (1 − α_min) · 2^(−max(0, e − start_epoch + 1) / τ)
 
 例如 α_min=0.7、start_epoch=2、τ=1.0 时：
-    e=2: α=0.810, e=3: 0.741, e=4: 0.715, e=5: 0.706, ... → 0.700
-    β:   0.190,      0.259,      0.285,      0.294,     ... → 0.300
+    e=2: α=0.850, e=3: 0.775, e=4: 0.7375, e=5: 0.71875, ... → 0.700
+    β:   0.150,      0.225,      0.2625,      0.28125,     ... → 0.300
 
 注意：α_min=0.7 表示最终 70% 的目标来自硬标签、30% 来自教师；
 不要把它误设成教师权重 0.7。若想要更强的教师，可显式降低
@@ -29,8 +30,6 @@ EMA-SAT（自自适应训练）的教师目标。
 * 完全可关闭：enabled=False 时 targets() 原样返回硬标签。
 * 推荐在 epoch 末用 eval 模式对 train 全集预测一次，再统一更新。
 """
-import math
-
 import numpy as np
 import torch
 
@@ -64,8 +63,8 @@ class EMASAT:
         e = self.epoch if epoch is None else int(epoch)
         if e < self.start_epoch:
             return 1.0
-        delta = e - self.start_epoch + 1
-        return self.alpha_min + (1.0 - self.alpha_min) * math.exp(-delta / self.tau)
+        delta = max(0, e - self.start_epoch + 1)
+        return self.alpha_min + (1.0 - self.alpha_min) * (2.0 ** (-delta / self.tau))
 
     def beta_at(self, epoch=None):
         """当前 epoch 的教师权重；= 1 - alpha，渐近 1-alpha_min。"""

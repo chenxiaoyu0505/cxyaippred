@@ -109,7 +109,7 @@
 - **结论**：实现修正后 EMA 不再卡在 0.5，但排序指标仍无显著增益，MCC@val 显著下降；SAT 不能作为主创新，只能作负结果/可选正则。
 - **下一步**：`cv5_ema_ramp` 用指数饱和硬标签权重 α（α_min=0.7、start=2、tau=1.0、decay=0.65）验证渐进 SAT；不要再用“教师权重 0.7”的旧解释。
 
-### #4 `cv5_ema_ramp` —— 指数饱和 EMA-SAT（α→0.7，已完成）
+### #4 `cv5_ema_ramp` —— 指数饱和 EMA-SAT 的旧 `exp` 近似（已完成）
 
 - **首次启动**：2026-11-10 11:00（旧 β 语义，已终止）
 - **作废原因**：把 0.7 当成教师权重 β_max，实际应为硬标签权重 α_min=0.7（教师上限 0.3）。旧 run 的 fold0–fold2 产物只能当错误实现记录，不得作为结果。
@@ -118,15 +118,19 @@
   # 旧接口已删除；仅作历史记录
   D:\anaconda3\envs\esm2_env\python.exe scripts\run_5fold.py --exp cv5_ema_ramp --ema --ema-beta-max 0.7 --ema-start-epoch 2 --ema-tau 1.0 --ema-decay 0.65 --note "指数饱和SAT"
   ```
-- **新语义参数**：α_e = 0.7 + 0.3·exp(−(e−2+1)/1.0)；e=2/3/4/5 时 α=0.810/0.741/0.715/0.706，β=0.190/0.259/0.285/0.294。
+- **该 run 的参数**：α_e = 0.7 + 0.3·exp(−(e−2+1)/1.0)；e=2/3/4/5 时 α=0.810/0.741/0.715/0.706，β=0.190/0.259/0.285/0.294。这是旧 `exp` 近似，**不是**用户最终指定的 `2^(−max(0,e−1))`。
 - **新命令**：
   ```powershell
   D:\anaconda3\envs\esm2_env\python.exe scripts\run_5fold.py --exp cv5_ema_ramp --ema --ema-alpha-min 0.7 --ema-start-epoch 2 --ema-tau 1.0 --ema-decay 0.65 --note "渐进SAT(alpha0.7)"
   ```
 - **状态**：完成（2026-11-10 11:59；旧目录已移到 `_work/cv5_ema_ramp_beta07_invalid`）
 - **结果**（单折，mean ± sd）：AUROC **0.7293 ± 0.0147**（基线 0.7277 ± 0.0130，Δ +0.0016，p=0.775）；AUPR **0.6516 ± 0.0142**（基线 0.6494 ± 0.0103，Δ +0.0022，p=0.662）；MCC@0.5 **0.3410 ± 0.0276**（基线 0.3141，Δ +0.0269，p=0.026）；MCC@val **0.3417 ± 0.0221**（基线 0.3580，Δ −0.0163，p=0.385）；F1@free 0.5999；ECE **0.1211**、Brier **0.2193**（基线 0.1167/0.2171）。
-- **结论**：与固定 `cv5_ema_fix`（0.7294/0.6515）几乎相同；AUROC/AUPR 无显著增益，MCC@0.5 的提高来自概率整体少右移（阈值效应），MCC@val 仍低于 `cv5`。渐进调度本身不带来额外收益，SAT 不能作为主创新；最多作为“阈值/校准”消融或负结果。
+- **结论**：与固定 `cv5_ema_fix`（0.7294/0.6515）几乎相同；AUROC/AUPR 无显著增益，MCC@0.5 的提高来自概率整体少右移（阈值效应），MCC@val 仍低于 `cv5`。旧 `exp` 近似不带来额外收益，SAT 不能作为主创新；最多作为“阈值/校准”消融或负结果。
 - **产物**：`experiments/cv5_ema_ramp/{runs,results,manifest.json}`。
+- **精确 `2^-s` 版（待跑，未启动）**：当前代码已实现 `α_e=0.7+0.3·2^(−max(0,e−start+1)/τ)`；`start=2, τ=1` 时 e=2/3/4/5 为 α=0.850/0.775/0.7375/0.71875。用户自行执行：
+  ```powershell
+  D:\anaconda3\envs\esm2_env\python.exe scripts\run_5fold.py --exp cv5_ema_halving --ema --ema-alpha-min 0.7 --ema-start-epoch 2 --ema-tau 1.0 --ema-decay 0.65 --note "精确2^-s渐进SAT"
+  ```
 
 ---
 
@@ -136,7 +140,8 @@
 |---|---|---|---|
 | — | `cv5_ema` / `cv5_mcc` / `cv5_full` | 历史实验 | 已完成；`cv5_ema` 用的是未修正的 EMA，`cv5_mcc`/`cv5_full` 含已移除的 MCC，均只能当历史对照 |
 | 2 | `cv5_ema_fix` | 旧接口固定 α=0.7（历史） | 已完成：AUROC 0.7294 / AUPR 0.6515，排序无显著增益 |
-| 2b | `cv5_ema_ramp` | `--ema --ema-alpha-min 0.7 --ema-start-epoch 2 --ema-tau 1.0 --ema-decay 0.65` | 已完成：AUROC 0.7293 / AUPR 0.6516，与固定 α=0.7 相同；不改善排序 |
+| 2b | `cv5_ema_ramp` | 旧 `exp` 近似，已完成 | AUROC 0.7293 / AUPR 0.6516，与固定 α=0.7 相同；不改善排序 |
+| 2c | `cv5_ema_halving` | `--ema --ema-alpha-min 0.7 --ema-start-epoch 2 --ema-tau 1.0 --ema-decay 0.65` | 精确 `2^-s` 调度（α=0.850/0.775/0.7375…）；待用户执行 |
 | 3 | `noise10` / `noise10_ema` | `--label-noise 0.10`（±`--ema`） | EMA 是否真的抗噪（判定规则见 DECISIONS.md） |
 | 4 | `legacy` | `run_legacy.py --exp legacy` | 与外部基线的公平对照线（4,224/462） |
 | 5 | `cv5_cluster` | 换聚类划分 | 回应 R1-4 的序列相似性泄漏（尚未实现） |

@@ -57,15 +57,15 @@ class DataCfg:
 class EMACfg:
     """EMA-SAT：教师目标 = α_e·硬标签 + (1−α_e)·历史概率 EMA
 
-    α_e = alpha_min + (1−alpha_min)·exp(−(e − start_epoch + 1) / tau).
+    α_e = alpha_min + (1−alpha_min)·2^(−max(0, e−start_epoch+1)/tau).
     α 是硬标签权重，不是教师权重；alpha_min=0.7 表示最终 70% 来自
-    硬标签、30% 来自教师（β_max=0.3）。
+    硬标签、30% 来自教师（β_max=0.3）。tau=1 时每轮减半。
     """
     enabled: bool = False
     alpha_min: float = 0.7    # 硬标签权重下限；等价教师权重上限 0.3
     decay: float = 0.65       # 教师状态 q 的滑动平均系数
     start_epoch: int = 2      # 从该 epoch 起使用教师；上一轮末初始化 q
-    tau: float = 1.0          # 指数饱和时间常数；越小下降越快
+    tau: float = 1.0          # 半衰期（epoch）；1.0 即每轮减半
 
 
 @dataclass
