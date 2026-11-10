@@ -1,0 +1,24 @@
+{
+  "source": "D:\\BIP\\module4\\cxyaippred\\data\\aip_all.csv",
+  "source_sha256": "5f3eb4b194eadeb30dfa9a26cc8104df5e52d774369415fb0e49eb4d9acaa78c",
+  "bips": "D:\\BIP\\data\\BIPs.csv",
+  "bips_sha256": "e165928e434bcaeba7211a06192eace66b8b336c88a07af3f1f49fde711fbc10",
+  "n_bips": 56,
+  "n_before": 4686,
+  "n_after": 4634,
+  "pos_before": 1840,
+  "pos_after": 1788,
+  "neg_before": 2846,
+  "neg_after": 2846,
+  "dropped_pos": 56,
+  "dropped_neg": 0,
+  "positive_rate_after": 0.385844,
+  "restored_positives": [
+    "CIIHRGKPFQLEAVFEANQNTKTA",
+    "GEPGIAGFKGAQGPKGEPGPA",
+    "HGRGTCNYYSNSYSFWLASL",
+    "RIPLAVLFGIFLYMGV"
+  ],
+  "note": "BIP-free 4,630 + 4 HD-AIP-only positives restored by user request; equals aip_train_nobip + aip_test_nobip.",
+  "sha256": "50dd9e0bd8541988c4ae1309b7b1e074bbe0bb90d00cfaf8db2f63018e25682b"
+}

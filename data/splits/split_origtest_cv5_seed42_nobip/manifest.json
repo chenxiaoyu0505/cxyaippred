@@ -1,0 +1,177 @@
+{
+  "experiment": "split_origtest_cv5_seed42_nobip",
+  "created": "2026-11-10T22:55:10",
+  "status": "ready",
+  "data": {
+    "file": "data/splits/split_origtest_cv5_seed42_nobip/table.csv",
+    "n": 4634,
+    "pos": 1788,
+    "sha256": "78e8f8c3580c0ed8b314180404f27163c0a677e6500a6f74356f9caf0f053a05"
+  },
+  "split": {
+    "file": "data/splits/split_origtest_cv5_seed42_nobip/folds.csv",
+    "sha256": "82417fc4e6087747dd240cd921db672a22a41e67a5e0dfe5b5fd06f1f774f33a"
+  },
+  "code": {
+    "src/__init__.py": "997259f1d19c9421",
+    "src/cache_util.py": "22fc3a41e01f98a9",
+    "src/checkpoint.py": "aaa95046a89916d6",
+    "src/config.py": "40117e0889ab0a3b",
+    "src/data_io.py": "eaafc2e021472a0b",
+    "src/ema_sat.py": "05121a91bae4a604",
+    "src/esm_backbone.py": "9330d50ef2d9836f",
+    "src/features.py": "891ca35ef4687d2e",
+    "src/manifest.py": "f998fac19e1a9a59",
+    "src/metrics.py": "7c4baa57304f86b9",
+    "src/model_aip.py": "d233e01442b9f0b5",
+    "src/threshold.py": "410a5cb6db988aeb",
+    "src/utils.py": "bde501c6f0a39631",
+    "scripts/cache_esm.py": "6cd0c345ce6de7a6",
+    "scripts/check_env.py": "5b43b8f6757671fd",
+    "scripts/convert_legacy_head.py": "11ad23a813658dd3",
+    "scripts/drop_bips.py": "9c5665d79ff6faf3",
+    "scripts/eval_aip.py": "dbe598f26386d223",
+    "scripts/list_exps.py": "4dd2e4ab7e3d3a0c",
+    "scripts/make_5fold.py": "834f817b10a7bd5f",
+    "scripts/make_aip_dataset.py": "4789d02759457c18",
+    "scripts/make_holdout_cv.py": "228a0c44f243f889",
+    "scripts/predict.py": "581aab03faf80549",
+    "scripts/preflight.py": "2f6f3d8d37e8cd72",
+    "scripts/register_exp.py": "1e0c589dbec5e037",
+    "scripts/run_5fold.py": "cc0811efc8e44328",
+    "scripts/run_legacy.py": "711d8753ce5f9103",
+    "scripts/selftest.py": "a3e6257f003f380b",
+    "scripts/train_aip.py": "d7a5aa7639bf7a05",
+    "scripts/legacy_multitask/eval.py": "1964fde29bcfbd45",
+    "scripts/legacy_multitask/extract_handcraft_features.py": "8cc9c176070f7793",
+    "scripts/legacy_multitask/features.py": "891ca35ef4687d2e",
+    "scripts/legacy_multitask/models.py": "464f88a30ceab996",
+    "scripts/legacy_multitask/predict_peps.py": "bcafe2062e86c86e",
+    "scripts/legacy_multitask/train.py": "b2737d2e0d015142",
+    "scripts/legacy_multitask/utils.py": "dfd3405d0bb2232f"
+  },
+  "env": {
+    "python": "3.11.14",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "executable": "D:\\anaconda3\\envs\\esm2_env\\python.exe",
+    "torch": "unavailable: [WinError 1114] 动态链接库(DLL)初始化例程失败。 Error loading \"D:\\anaconda3\\envs\\esm2_env\\Lib\\site-packages\\torch\\lib\\c10.dll\" or one of its dependencies."
+  },
+  "kind": "split",
+  "design": "external_test_cv",
+  "split_seed": 42,
+  "n_folds": 5,
+  "holdout_ratio": null,
+  "cv_ratio": 0.9025,
+  "val_ratio_within_cv": 0.2,
+  "holdout": {
+    "n": 452,
+    "pos": 175,
+    "neg": 277
+  },
+  "cv_pool": {
+    "n": 4182,
+    "pos": 1613,
+    "neg": 2569
+  },
+  "per_fold": [
+    {
+      "fold": 0,
+      "train": {
+        "n": 3345,
+        "pos": 1290,
+        "neg": 2055
+      },
+      "val": {
+        "n": 837,
+        "pos": 323,
+        "neg": 514
+      },
+      "test": {
+        "n": 452,
+        "pos": 175,
+        "neg": 277
+      }
+    },
+    {
+      "fold": 1,
+      "train": {
+        "n": 3345,
+        "pos": 1290,
+        "neg": 2055
+      },
+      "val": {
+        "n": 837,
+        "pos": 323,
+        "neg": 514
+      },
+      "test": {
+        "n": 452,
+        "pos": 175,
+        "neg": 277
+      }
+    },
+    {
+      "fold": 2,
+      "train": {
+        "n": 3346,
+        "pos": 1290,
+        "neg": 2056
+      },
+      "val": {
+        "n": 836,
+        "pos": 323,
+        "neg": 513
+      },
+      "test": {
+        "n": 452,
+        "pos": 175,
+        "neg": 277
+      }
+    },
+    {
+      "fold": 3,
+      "train": {
+        "n": 3346,
+        "pos": 1291,
+        "neg": 2055
+      },
+      "val": {
+        "n": 836,
+        "pos": 322,
+        "neg": 514
+      },
+      "test": {
+        "n": 452,
+        "pos": 175,
+        "neg": 277
+      }
+    },
+    {
+      "fold": 4,
+      "train": {
+        "n": 3346,
+        "pos": 1291,
+        "neg": 2055
+      },
+      "val": {
+        "n": 836,
+        "pos": 322,
+        "neg": 514
+      },
+      "test": {
+        "n": 452,
+        "pos": 175,
+        "neg": 277
+      }
+    }
+  ],
+  "table_csv": "data/splits/split_origtest_cv5_seed42_nobip/table.csv",
+  "table_sha256": "78e8f8c3580c0ed8b314180404f27163c0a677e6500a6f74356f9caf0f053a05",
+  "train_csv": "data/aip_train_nobip.csv",
+  "holdout_csv": "data/splits/split_origtest_cv5_seed42_nobip/test.csv",
+  "holdout_sha256": "806c3f49be362e39f0887370f1b4a82f3c2919afa6e1c7e9676a9f0cefc7b3db",
+  "note": "--test-data 作为固定 test；train/val 仅在 --data 内划分。",
+  "test_csv": "data/splits/split_origtest_cv5_seed42_nobip/test.csv",
+  "test_sha256": "806c3f49be362e39f0887370f1b4a82f3c2919afa6e1c7e9676a9f0cefc7b3db",
+  "test_data_csv": "data/aip_test_nobip.csv"
+}

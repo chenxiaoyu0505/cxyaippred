@@ -52,15 +52,32 @@ Platform specifics, verified versions and expected runtimes: **[docs/INSTALL.md]
 
 | File | Rows | Description |
 |---|---|---|
-| `data/aip_all.csv` | 4,686 | `sequence,label`; 1,840 positives (39.3%) |
+| `data/aip_all.csv` | 4,686 | `sequence,label`; 1,840 positives (39.3%); original, includes 56 row-level BIPs |
+| `data/aip_all_nobip.csv` | 4,634 | BIP-free canonical table; 1,788 positives (38.6%); removes the 56 row-level BIPs and restores the 4 HD-AIP-only positives |
 | `data/splits/split_seed42_n5/folds.csv` | 23,430 | long format: `sequence,label,fold,split` |
+| `data/splits/split_seed42_n5_nobip/folds.csv` | 23,150 | historical 4,630 BIP-free split (do not use with the current 4,634 table) |
+| `data/splits/split_origtest_cv5_seed42_nobip/folds.csv` | 23,170 | fixed original test 452; 5-fold train/val inside train 4,182 |
 | `data/splits/legacy_seed42/folds.csv` | 5,148 | original 4,224/462 split, for comparison with published baselines |
 
-Positive rate 39.3%, median length 15 aa (max 73). No duplicate sequences, no conflicting
-labels, and the 5 test folds partition the dataset exactly once.
+The original dataset has positive rate 39.3%, median length 15 aa (max 73). No duplicate
+sequences and no conflicting labels. In `split_seed42_n5`, the 5 test folds partition the
+dataset exactly once; in `split_origtest_cv5_seed42_nobip`, the 452-row test is fixed and
+identical in every fold.
 
-The split is a fixed artifact, not something regenerated at training time: each run records
-its SHA-256, and `scripts/make_5fold.py` reproduces it bit-for-bit from `data/aip_all.csv`.
+`aip_all_nobip.csv` removes the 56 BIPs (46 train + 10 test) that carry both
+`label-aip=1` and `label-pip=1` in the same source row. It keeps the other 327
+sequence-level AIP+/PIP+ peptides that exist as separate AIP and PIP rows. The four
+HD-AIP-only positives are restored on top, so the canonical table is 4,634 rows.
+The old `aip_all.csv` and `split_seed42_n5` remain unchanged for historical reproducibility;
+the 4,630-row `split_seed42_n5_nobip` is historical and no longer matches this table.
+
+Each split is a fixed artifact, not something regenerated at training time: each run records
+its SHA-256, and `scripts/make_5fold.py` reproduces it bit-for-bit from the corresponding CSV
+(`aip_all.csv` → `split_seed42_n5`). `scripts/make_holdout_cv.py` generates the fixed-test
+5-fold variant (`aip_train_nobip.csv` + `aip_test_nobip.csv` →
+`split_origtest_cv5_seed42_nobip`); its `test` is the same fixed 452-peptide set in every
+fold, so the five test scores are repeated evaluations on one independent set, not five
+disjoint test sets.
 
 ---
 

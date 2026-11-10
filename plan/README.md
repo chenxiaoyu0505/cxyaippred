@@ -50,6 +50,28 @@
 同目录 `manifest.json` 记录 split_seed / n_folds / 每折人数 / 文件 sha256。
 （旧的 `data/folds_5cv_seed42.csv` 已删除，内容与新版逐条一致，见 `data/FOLDS.md`。）
 
+**2026-11-10 BIP-free 变体**：原 `aip_all.csv` 含 56 条同一行 `label-aip=1,label-pip=1`
+的 BIP（46 train + 10 test）。为排除旧双任务 BIP 重叠，另生成
+`data/aip_all_nobip.csv`：4,634 行（1,788 阳 / 2,846 阴，38.6%），删除这 56 条，
+并补回 4 条 HD-AIP-only 阳性。旧 `data/splits/split_seed42_n5_nobip/folds.csv`
+（23,150 行 = 4,630 × 5 折）只作历史，不再与当前主表对应；原文件与原 split 保留用于复现。
+
+**2026-11-10 评估设计固定为原始 train/test**：新实验沿用 BIP-free 的原始
+`aip_train_nobip.csv`（4,182 条：1,613 阳 / 2,569 阴）和
+`aip_test_nobip.csv`（452 条：175 阳 / 277 阴）。5 折只在 4,182 条 train 内做，
+每折 80% train / 20% val；452 条 test 固定，模型不参与任何选择。
+产物：`data/splits/split_origtest_cv5_seed42_nobip/`（23,170 行），生成脚本
+`scripts/make_holdout_cv.py`（`--data` + `--test-data`）。
+旧 `split_seed42_n5` / `split_seed42_n5_nobip` 只用于复现；4,167/463 的 holdout 设计已废弃。
+
+| 层 | 占总量 | 行数 | 用途 |
+|---|---|---|---|
+| 固定 test | 9.8% | 452 | 只在最后打分，模型不参与任何选择 |
+| val | 18.0% | 836/837 | 早停、选阈值 |
+| train | 72.2% | 3,345/3,346 | 梯度更新、EMA |
+
+旧 5 折的 test/val/train 比例表（20/16/64）仅适用于 `split_seed42_n5*` 历史结果。
+
 | 层 | 占单折 | 行数 | 用途 |
 |---|---|---|---|
 | test | 20% | 937 | 只评一次，不得用于任何选择 |
