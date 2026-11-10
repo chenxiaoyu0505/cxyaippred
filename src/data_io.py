@@ -19,6 +19,7 @@
 * `cache/esm_index.csv`    row, sha1(sequence) 防止行序漂移
 """
 import hashlib
+import json
 import os
 
 import numpy as np
@@ -158,6 +159,45 @@ def hand_feats(table, cache_dir='cache'):
     return arr
 
 
+# ------------------------------------------------------------ 手工特征标准化
+#
+# 为什么必须做：694 维的尺度差 3.2×10⁶（paac 的 std 1.18e-4 vs mw 的 379.2）。
+# 首层权重初始化在 ±1/√(1974)≈±0.0225 量级，乘以各维 std 后 694 维的贡献总和
+# 只有 5.01，其中 mw 一项占 4.20（83.7%），前两维占 92.4% —— 所谓"694 维手工
+# 特征"在数值上其实只有 2 维在起作用。标准化后每维贡献相当。
+#
+# 为什么按折、只用训练行：val/test 的统计量如果参与均值方差，就是泄漏；
+# 每折各拟一份，是因为 5 折的 test 集合不同，全局统计量同样泄漏。
+
+HAND_SCALER_EPS = 1e-8
+
+
+def fit_hand_scaler(hand, train_idx):
+    """只用训练行拟合标准化参数，返回 (mean, std) 均为 float32 [D]。"""
+    h = np.asarray(hand, dtype=np.float64)[np.asarray(train_idx)]
+    mean = h.mean(axis=0)
+    std = h.std(axis=0)
+    # 常数维（std≈0）不缩放，否则除以 0 变成 inf/NaN
+    std = np.where(std < HAND_SCALER_EPS, 1.0, std)
+    return mean.astype(np.float32), std.astype(np.float32)
+
+
+def apply_hand_scaler(hand, mean, std):
+    """把同一份参数作用到全部行（train/val/test 一起）。"""
+    return ((np.asarray(hand, dtype=np.float32) - mean) / std).astype(np.float32)
+
+
+def save_hand_scaler(path, mean, std):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    np.savez(path, mean=mean, std=std)
+    return path
+
+
+def load_hand_scaler(path):
+    z = np.load(path)
+    return z['mean'], z['std']
+
+
 def load_esm_cache(cache_dir, table):
     """
     返回 (emb [N,L,D] fp16, mask [N,L] uint8)。
@@ -169,6 +209,17 @@ def load_esm_cache(cache_dir, table):
     for p in (p_emb, p_mask, p_idx):
         if not os.path.exists(p):
             raise SystemExit('缺少 ESM 缓存 %s，先运行 scripts/cache_esm.py' % p)
+
+    # mask 语义校验：旧缓存的 1 也覆盖 <cls>/<eos>，会让池化分母多 2 并混入特殊
+    # token 特征。宁可报错要求重建，也不让它在暗中污染所有指标。
+    p_meta = os.path.join(cache_dir, 'esm_meta.json')
+    if os.path.exists(p_meta):
+        with open(p_meta, encoding='utf-8') as f:
+            meta = json.load(f)
+        if meta.get('mask') != 'residues_only_v1':
+            raise SystemExit(
+                'ESM 缓存的 mask 是旧语义（把 <cls>/<eos> 当残基），会使池化分母多 2。\n'
+                '重建：python scripts/cache_esm.py --force')
 
     idx = pd.read_csv(p_idx)
     if len(idx) != len(table):

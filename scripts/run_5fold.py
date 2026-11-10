@@ -24,6 +24,14 @@
     python scripts/run_5fold.py --seeds 0,1,2        # 3 个 model seed
     python scripts/run_5fold.py --skip-existing      # 断了接着跑
     python scripts/run_5fold.py --keep-cache         # 保留 ESM 缓存
+    python scripts/run_5fold.py --exp x --register   # 跑完登记到 experiments/_index.csv
+
+为什么登记要显式打开
+------------------
+    experiments/_index.csv 是被 git 跟踪的文件。若每次跑完都自动写，跑一次实验
+    就弄脏一次工作区，远端也跑过实验时 git pull 必然报
+    "Your local changes to the following files would be overwritten by merge"。
+    所以默认不写，需要发布结果时再： python scripts/register_exp.py --exp <名字>
 """
 import argparse
 import os
@@ -105,7 +113,9 @@ def _update_index(args, folds, seeds, exp_dir):
     old = [r for r in raw if r.get('exp') != args.exp]
     os.makedirs(os.path.dirname(idx_path), exist_ok=True)
     with open(idx_path, 'w', encoding='utf-8-sig', newline='') as f:
-        w = csv.DictWriter(f, fieldnames=cols)
+        # lineterminator 必须显式给 '\n'：csv 默认写 CRLF，会让仓库里存的是 LF 的
+        # 总表整文件变脏（一行 upsert 也会变成全文件 diff）
+        w = csv.DictWriter(f, fieldnames=cols, lineterminator='\n')
         w.writeheader()
         for r in old:
             w.writerow({c: r.get(c, '') for c in cols})
@@ -138,6 +148,11 @@ def main():
     ap.add_argument('--ema-start-epoch', type=int, default=2)
     ap.add_argument('--ema-tau', type=float, default=1.0,
                     help='α 半衰期（epoch）；1.0 即每轮减半')
+    ap.add_argument('--norm', default='', choices=['', 'layer', 'peptide_bn', 'masked_batch', 'batch'],
+                    help='残差块归一化（默认 layer；peptide_bn = masked BN + 按肽等权；'
+                         'masked_batch = masked BN 按残基等权；batch = 原生 BN，仅消融）')
+    ap.add_argument('--hand-norm', default='', choices=['', 'standard', 'none'],
+                    help='手工特征标准化（默认 standard；none 为旧行为/消融）')
     ap.add_argument('--device', default='')
     ap.add_argument('--cache-dir', default='', help='ESM 缓存目录，默认 <root>/cache；'
                                                    '调试时可指向 _work\\fakecache')
@@ -146,6 +161,9 @@ def main():
     ap.add_argument('--skip-existing', action='store_true',
                     help='（同 --resume）已有 test_probs.csv 的 run 跳过')
     ap.add_argument('--skip-eval', action='store_true')
+    ap.add_argument('--register', action='store_true',
+                    help='跑完把本实验登记到 experiments/_index.csv（该总表被 git 跟踪，'
+                         '默认不登记以免弄脏工作区；事后可用 scripts/register_exp.py 补登记）')
     args = ap.parse_args()
 
     # ---- 实验名校验与重复保护 ----
@@ -236,6 +254,10 @@ def main():
                    '--cache-dir', cache_dir]
             if args.ema:
                 cmd.append('--ema')
+            if args.norm:
+                cmd += ['--norm', args.norm]
+            if args.hand_norm:
+                cmd += ['--hand-norm', args.hand_norm]
             if args.device:
                 cmd += ['--device', args.device]
             run(cmd, '训练 fold%d / seed%d' % (k, seed))
@@ -275,8 +297,12 @@ def main():
             'seconds': round(time.time() - t_all, 1),
         })
 
-    # ---- 全局实验总表 ----
-    _update_index(args, folds, seeds, exp_dir)
+    # ---- 全局实验总表（默认不写；--register 才登记）----
+    if args.register:
+        _update_index(args, folds, seeds, exp_dir)
+    else:
+        print('\n[总表] 未登记 experiments/_index.csv（默认行为）。'
+              '要登记：python scripts/register_exp.py --exp %s' % args.exp)
 
     # ---- 清理 ----
     if not args.keep_cache:

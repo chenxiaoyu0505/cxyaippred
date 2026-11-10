@@ -16,6 +16,13 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _flat(j, key, default=None):
+    """manifest 是扁平结构（write_manifest 里 man.update(extra)）；兼容早期 extra 嵌套。"""
+    if key in j:
+        return j[key]
+    return (j.get('extra') or {}).get(key, default)
+
+
 def load_index():
     import csv
     p = os.path.join(ROOT, 'experiments', '_index.csv')
@@ -28,10 +35,10 @@ def load_index():
         if not os.path.exists(man):
             continue
         j = json.load(open(man, encoding='utf-8'))
-        st = (j.get('extra') or {}).get('settings') or {}
+        st = _flat(j, 'settings', {}) or {}
         rows.append({
             'exp': name, 'status': j.get('status', ''),
-            'note': (j.get('extra') or {}).get('note', ''),
+            'note': _flat(j, 'note', '') or '',
             'ema': int(bool(st.get('ema'))),
             'epochs': st.get('epochs', ''), 'folds': '', 'seeds': '', 'n_runs': '',
             'auroc': '', 'aupr': '', 'mcc_val': '', 'created': j.get('created', ''),

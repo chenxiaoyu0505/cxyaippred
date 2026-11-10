@@ -41,8 +41,9 @@ sys.path.insert(0, ROOT)
 
 from src.checkpoint import save_head                       # noqa: E402
 from src.config import RunCfg                              # noqa: E402
-from src.data_io import (hand_feats, iter_batches, load_esm_cache,  # noqa: E402
-                         load_folds, load_table)
+from src.data_io import (apply_hand_scaler, fit_hand_scaler,  # noqa: E402
+                         hand_feats, iter_batches, load_esm_cache,
+                         load_folds, load_table, save_hand_scaler)
 from src.ema_sat import EMASAT                             # noqa: E402
 from src.manifest import sha256_file                       # noqa: E402
 from src.metrics import threshold_free                       # noqa: E402
@@ -128,6 +129,13 @@ def main():
                     help='从该 epoch 起使用教师；上一轮末初始化 q')
     ap.add_argument('--ema-tau', type=float, default=1.0,
                     help='α 半衰期（epoch）；1.0 即每轮减半')
+    ap.add_argument('--norm', default='', choices=['', 'layer', 'peptide_bn', 'masked_batch', 'batch'],
+                    help="残差块归一化。默认 layer（逐位置 LayerNorm）；"
+                         "peptide_bn = masked BN + 按肽等权；masked_batch = masked BN 按残基等权；"
+                         "batch = 原生 BN（padding 进统计量，仅消融/复现旧行为）")
+    ap.add_argument('--hand-norm', default='', choices=['', 'standard', 'none'],
+                    help='手工特征标准化。默认 standard（每折只用训练行拟合 mean/std）；'
+                         'none 为旧行为，694 维里基本只有 mw/charg 起作用')
     ap.add_argument('--device', default='auto',
                     help='auto/cuda/mps/cpu，默认自动选择')
     ap.add_argument('--run-name', default='', help='默认 fold{k}_{split_id}_m{seed}')
@@ -155,6 +163,10 @@ def main():
     cfg.ema.decay = args.ema_decay
     cfg.ema.start_epoch = args.ema_start_epoch
     cfg.ema.tau = args.ema_tau
+    if args.norm:
+        cfg.model.norm = args.norm
+    if args.hand_norm:
+        cfg.model.hand_norm = args.hand_norm
 
     run_name = args.run_name or cfg.run_name()
     if args.out:
@@ -179,6 +191,17 @@ def main():
     y = table['label'].values.astype(np.float32)
     folds = load_folds(cfg.data.folds_csv, cfg.fold, table)
     hand = hand_feats(table, cfg.data.cache_dir)
+    if cfg.model.hand_norm == 'standard':
+        # 只在本折训练行上拟合：val/test 的统计量参与进来就是泄漏
+        h_mean, h_std = fit_hand_scaler(hand, folds['train'])
+        hand = apply_hand_scaler(hand, h_mean, h_std)
+        save_hand_scaler(os.path.join(run_dir, 'hand_scaler.npz'), h_mean, h_std)
+        print('[%s] 手工特征标准化：%d 维，统计量取自 %d 条训练样本'
+              % (run_name, hand.shape[1], len(folds['train'])))
+    else:
+        h_mean = h_std = None
+        print('[%s] [warn] hand_norm=%s：手工特征未标准化，'
+              '694 维里基本只有 mw/charg 两项在起作用' % (run_name, cfg.model.hand_norm))
     emb, mask = load_esm_cache(cfg.data.cache_dir, table)
 
     # ---- 标签噪声注入（可审计：翻转了哪些行全部落盘）----
@@ -215,7 +238,8 @@ def main():
     # ---- 模型 ----
     head = AIPHead(embed_dim=cfg.model.embed_dim, hand_dim=cfg.model.hand_dim,
                    hidden=cfg.model.hidden, n_res=cfg.model.n_res,
-                   cnn_drop=cfg.model.cnn_drop, mlp_drop=cfg.model.mlp_drop).to(device)
+                   cnn_drop=cfg.model.cnn_drop, mlp_drop=cfg.model.mlp_drop,
+                   norm=cfg.model.norm).to(device)
     opt = torch.optim.Adam(head.parameters(), lr=cfg.train.lr,
                            weight_decay=cfg.train.weight_decay)
     sat = EMASAT(n, alpha_min=cfg.ema.alpha_min, decay=cfg.ema.decay,
@@ -311,6 +335,7 @@ def main():
         'fold': cfg.fold, 'seed': cfg.train.seed,
         'threshold': thr['threshold'], 'val_aupr': best_aupr,
         'split_id': cfg.data.split_id,
+        'hand_norm': cfg.model.hand_norm,
         'train_data': os.path.basename(cfg.data.folds_csv),
         'note': 'single-task AIP head; metrics computed by eval_aip.py',
     })

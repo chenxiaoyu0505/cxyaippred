@@ -35,6 +35,8 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 from src.checkpoint import load_head            # noqa: E402
+from src.data_io import apply_hand_scaler, load_hand_scaler  # noqa: E402
+from src.esm_backbone import residue_mask       # noqa: E402
 from src.features import compute_handcraft      # noqa: E402
 from src.utils import pick_device               # noqa: E402
 
@@ -116,6 +118,27 @@ def main():
     print('ESM: %s | hand_dim=%d | 每个头 %.1f MB'
           % (esm_name, hand_dim, heads[0].size_mb()))
 
+    # 每折各有一份标准化参数（只用该折训练行拟合），所以不能共用一个 hand 张量
+    scalers = []
+    for p, m in zip(paths, metas):
+        if m.get('hand_norm', 'none') != 'standard':
+            scalers.append(None)
+            continue
+        sp = os.path.join(os.path.dirname(os.path.abspath(p)), 'hand_scaler.npz')
+        if not os.path.exists(sp):
+            raise SystemExit(
+                '权重 %s 声明 hand_norm=standard，但同目录没有 hand_scaler.npz。\n'
+                '缺了它就无法复现训练时的输入，拒绝用未标准化的特征做预测。'
+                % os.path.relpath(p, ROOT))
+        mu, sd = load_hand_scaler(sp)
+        if len(mu) != hand_dim or len(sd) != hand_dim:
+            raise SystemExit('%s 的维度 %d/%d ≠ hand_dim %d'
+                             % (sp, len(mu), len(sd), hand_dim))
+        scalers.append((mu, sd))
+    n_scaled = sum(s is not None for s in scalers)
+    print('手工特征标准化：%d/%d 个头使用本折训练集的 mean/std'
+          % (n_scaled, len(heads)))
+
     seqs = read_sequences(args.input)
     print('待预测序列：%d 条' % len(seqs))
     if not seqs:
@@ -135,17 +158,18 @@ def main():
             enc = tok(chunk, return_tensors='pt', padding=True, truncation=True,
                       max_length=MAX_LEN)
             enc = {k: v.to(args.device) for k, v in enc.items()}
+            # 与训练时一致：1 = 真实残基，<cls>/<eos>/<pad> 均为 0
+            mask = residue_mask(enc, tok)
             h = esm(**enc, output_hidden_states=True).hidden_states[-1]
-            hand = torch.tensor(
-                np.stack([compute_handcraft(s) for s in chunk], axis=0),
-                dtype=torch.float32,
-            ).to(args.device)
-            if hand.shape[1] != hand_dim:
+            hand_np = np.stack([compute_handcraft(s) for s in chunk], axis=0).astype(np.float32)
+            if hand_np.shape[1] != hand_dim:
                 raise SystemExit('手工特征维度 %d 与权重要求的 %d 不一致'
-                                 % (hand.shape[1], hand_dim))
+                                 % (hand_np.shape[1], hand_dim))
             for j, head in enumerate(heads):
+                hj = hand_np if scalers[j] is None else apply_hand_scaler(hand_np, *scalers[j])
+                hand = torch.from_numpy(hj).to(args.device)
                 probs[i:i + len(chunk), j] = torch.sigmoid(
-                    head(h, enc['attention_mask'], hand)).cpu().numpy()
+                    head(h, mask, hand)).cpu().numpy()
             print('  %d/%d' % (min(i + args.batch_size, len(seqs)), len(seqs)), end='\r')
 
     out = pd.DataFrame({'sequence': seqs, 'prob_mean': probs.mean(axis=1),

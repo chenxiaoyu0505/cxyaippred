@@ -9,6 +9,7 @@ __pycache__/
 .vscode/
 Thumbs.db
 desktop.ini
+.DS_Store
 
 # ---- 缓存与中间产物（可重建，不入库）----
 _work/

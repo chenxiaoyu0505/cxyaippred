@@ -11,7 +11,7 @@
 产物（cache/ 下）
 ----------------
     esm_emb_fp16.npy   [N, Lmax, 1280] float16   约 0.9 GB（Lmax = 数据最长序列 + 2）
-    esm_mask.npy       [N, Lmax] uint8
+    esm_mask.npy       [N, Lmax] uint8           1 = 真实氨基酸残基（不含 <cls>/<eos>/<pad>）
     esm_index.csv      row, sha1, sequence       防止行序漂移
     esm_meta.json      esm 名称、层号、维度、行数、耗时
 
@@ -117,6 +117,9 @@ def main():
         json.dump({
             'esm_name': args.esm_name, 'layer': args.layer, 'dim': dim,
             'n_rows': n, 'lmax': lmax, 'dtype': 'float16',
+            # mask 语义版本：residues_only_v1 = 1 只标记真实氨基酸残基，
+            # <cls>/<eos>/<pad> 均为 0。旧缓存没有这个字段，读取时会被拒绝重建。
+            'mask': 'residues_only_v1',
             'seconds': round(time.time() - t0, 1),
             'data_csv': os.path.relpath(args.data, ROOT),
         }, f, indent=2, ensure_ascii=False)

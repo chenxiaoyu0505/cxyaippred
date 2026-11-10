@@ -41,6 +41,13 @@ class ModelCfg:
     n_res: int = 2
     cnn_drop: float = 0.2
     mlp_drop: float = 0.3
+    # 残差块归一化：'layer'        = 逐位置 LayerNorm（与 padding 无关，2026-11 起的默认）
+    #               'peptide_bn'   = masked BN + 按肽等权（掩掉 padding，每条肽投一票）
+    #               'masked_batch' = masked BN，按残基位置等权（长肽权重更大）
+    #               'batch'        = 原生 BatchNorm1d（padding 进统计量，仅消融/旧权重）
+    norm: str = 'layer'
+    # 手工特征标准化：'standard' = 每折只用训练行拟合 mean/std；'none' = 旧行为（不推荐）
+    hand_norm: str = 'standard'
 
 
 @dataclass
@@ -144,8 +151,9 @@ class RunCfg:
     def diff(self):
         """给人看的开关摘要，写进日志首行"""
         return ('fold=%d seed=%d ema=%s alpha_min=%.2f start=%d tau=%.2f '
-                'pos_weight=%.2f epochs=%d bs=%d lr=%g'
+                'pos_weight=%.2f epochs=%d bs=%d lr=%g norm=%s hand_norm=%s'
                 % (self.fold, self.train.seed,
                    self.ema.enabled, self.ema.alpha_min,
                    self.ema.start_epoch, self.ema.tau, self.train.pos_weight,
-                   self.train.epochs, self.train.batch_size, self.train.lr))
+                   self.train.epochs, self.train.batch_size, self.train.lr,
+                   self.model.norm, self.model.hand_norm))
