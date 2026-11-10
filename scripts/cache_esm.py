@@ -51,6 +51,10 @@ def main():
                          'esm_emb_layers_fp16.npy（[N,K,L,D]，只读 memmap），'
                          '单层缓存不受影响')
     ap.add_argument('--batch-size', type=int, default=16)
+    ap.add_argument('--dtype', default='fp32', choices=['fp32', 'fp16', 'bf16'],
+                    help='加载权重的精度。3B 模型必须用 fp16（fp32 要 12 GB）；'
+                         '缓存本身始终存 fp16')
+
     ap.add_argument('--device', default='auto',
                     help='auto/cuda/mps/cpu，默认自动选择')
     ap.add_argument('--force', action='store_true')
@@ -89,13 +93,14 @@ def main():
     lmax = max(len(s) for s in seqs) + 2
     lmax = min(lmax, 1024)
 
-    bb = ESMBackbone(args.esm_name, device=args.device, layer=args.layer)
+    bb = ESMBackbone(args.esm_name, device=args.device, layer=args.layer,
+                     dtype=args.dtype)
     dim = bb.dim
     k = len(layer_ids) if multi else 1
-    print('ESM %s | dim=%d | %s | Lmax=%d | device=%s'
+    print('ESM %s | dim=%d | %s | Lmax=%d | device=%s | dtype=%s'
           % (args.esm_name, dim,
              'layers=%s' % layer_ids if multi else 'layer=%d' % args.layer,
-             lmax, bb.device))
+             lmax, bb.device, args.dtype))
 
     if multi:
         emb = np.lib.format.open_memmap(p_emb, mode='w+', dtype=np.float16,

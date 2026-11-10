@@ -143,8 +143,10 @@ def main():
                     help='手工特征标准化。默认 standard（每折只用训练行拟合 mean/std）；'
                          'none 为旧行为，694 维里基本只有 mw/charg 起作用')
     ap.add_argument('--amphipath', action='store_true',
-                    help='手工块追加 10 维两亲性特征（疏水矩 μH，滑窗 7/11、转角 100°），'
-                         '总维度 694 → 704')
+                    help='手工块追加 10 维两亲性特征（疏水矩 μH，滑窗 7/11、转角 100°）。'
+                         '**这是默认行为**，本开关只为显式表达意图')
+    ap.add_argument('--no-amphipath', action='store_true',
+                    help='关掉两亲性特征，退回 694 维基础块（消融用）')
     ap.add_argument('--esm-cache', default='', choices=['', 'auto', 'single', 'layers'],
                     help='读哪份 ESM 缓存。建好分层缓存后 auto 会优先用它，'
                          '复现 1 层历史基线请显式给 single')
@@ -191,6 +193,8 @@ def main():
         cfg.model.hand_norm = args.hand_norm
     if args.amphipath:
         cfg.model.hand_extra = 'amphipath'
+    if args.no_amphipath:
+        cfg.model.hand_extra = ''
     if args.esm_fuse:
         cfg.model.esm_fuse = args.esm_fuse
     cfg.model.lnn = bool(args.lnn)
@@ -246,6 +250,8 @@ def main():
               '694 维里基本只有 mw/charg 两项在起作用' % (run_name, cfg.model.hand_norm))
     emb, mask = load_esm_cache(cfg.data.cache_dir, table,
                                prefer=args.esm_cache or 'auto')
+    # 嵌入维度以缓存为准：换 ESM-2 3B(2560) / 小模型(320/480) 时不用改配置
+    cfg.model.embed_dim = int(emb.shape[-1])
     if emb.ndim == 4:
         # 多层缓存：[N, K, L, D]。层号写进 cfg 与权重，推理时必须原样复现
         meta_esm = esm_meta(cfg.data.cache_dir)

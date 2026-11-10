@@ -149,19 +149,28 @@ def main():
     ap.add_argument('--ema-tau', type=float, default=1.0,
                     help='α 半衰期（epoch）；1.0 即每轮减半')
     ap.add_argument('--norm', default='', choices=['', 'layer', 'peptide_bn', 'masked_batch', 'batch'],
-                    help='残差块归一化（默认 layer；peptide_bn = masked BN + 按肽等权；'
-                         'masked_batch = masked BN 按残基等权；batch = 原生 BN，仅消融）')
+                    help='残差块归一化（默认 peptide_bn = masked BN + 按肽等权；'
+                         'layer = 逐位置 LayerNorm；masked_batch = masked BN 按残基等权；'
+                         'batch = 原生 BN，仅消融）')
     ap.add_argument('--lnn', action='store_true', help='启用 CfC(LNN) 序列支路')
     ap.add_argument('--lnn-dim', type=int, default=128, help='CfC 隐藏维度（默认 128）')
     ap.add_argument('--lnn-dt', type=float, default=1.0, help='CfC 的 Δt（默认 1.0）')
     ap.add_argument('--hand-norm', default='', choices=['', 'standard', 'none'],
                     help='手工特征标准化（默认 standard；none 为旧行为/消融）')
     ap.add_argument('--amphipath', action='store_true',
-                    help='手工块追加 10 维两亲性特征（疏水矩 μH），694 → 704 维')
-    ap.add_argument('--esm-cache', default='', choices=['', 'auto', 'single', 'layers'],
-                    help='读哪份 ESM 缓存（auto=有分层就用分层；复现 1 层基线用 single）')
+                    help='手工块追加 10 维两亲性特征（疏水矩 μH）。**这是默认行为**')
+    ap.add_argument('--no-amphipath', action='store_true',
+                    help='关掉两亲性特征，退回 694 维（消融用）')
+    ap.add_argument('--esm-cache', default='single', choices=['', 'auto', 'single', 'layers'],
+                    help='读哪份 ESM 缓存。**默认 single**（基线是单层）；'
+                         '跑多层实验要显式给 layers 或 auto，否则会静默退化成单层')
     ap.add_argument('--esm-fuse', default='', choices=['', 'weighted', 'mean', 'last'],
                     help='多层 ESM 缓存的融合方式（默认 weighted）')
+    ap.add_argument('--esm-name', default='',
+                    help='建缓存时用哪个 ESM-2（默认 facebook/esm2_t33_650M_UR50D）。'
+                         '换大模型请配独立 --cache-dir，别覆盖现有缓存')
+    ap.add_argument('--esm-dtype', default='', choices=['', 'fp32', 'fp16', 'bf16'],
+                    help='建缓存时加载权重的精度；3B 必须 fp16（fp32 要 12 GB）')
     ap.add_argument('--device', default='')
     ap.add_argument('--cache-dir', default='', help='ESM 缓存目录，默认 <root>/cache；'
                                                    '调试时可指向 _work\\fakecache')
@@ -235,6 +244,10 @@ def main():
     need_build = args.rebuild_cache or not has_cache(cache_dir)
     if need_build:
         cmd = [PY, os.path.join(HERE, 'cache_esm.py'), '--cache-dir', cache_dir]
+        if args.esm_name:
+            cmd += ['--esm-name', args.esm_name]
+        if args.esm_dtype:
+            cmd += ['--dtype', args.esm_dtype]
         if args.rebuild_cache:
             cmd.append('--force')
         run(cmd, '生成 ESM 缓存（约 0.9 GB，5–10 分钟）')
@@ -271,6 +284,8 @@ def main():
                 cmd += ['--hand-norm', args.hand_norm]
             if args.amphipath:
                 cmd += ['--amphipath']
+            if args.no_amphipath:
+                cmd += ['--no-amphipath']
             if args.esm_fuse:
                 cmd += ['--esm-fuse', args.esm_fuse]
             if args.esm_cache:

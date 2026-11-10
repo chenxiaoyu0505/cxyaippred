@@ -332,3 +332,27 @@ test 182/270）。划分折位不受影响（只改 label），`split_seed42_n5_
 
 **风险记账**：4,190 条里 43 条标签与 HD-AIP 相反，AUPR 差 0.0167（同一组预测、只换标签），
 与 μH 的效应同量级。任何跨文对比都要写明用的是哪套标签。
+
+## D-16 基线配置定版：704 维手工 + peptide_bn + 单层 ESM-2（2026-11-10）
+
+**背景**：两亲性特征此前是 `--amphipath` 开关，跑基线时容易忘；`--norm` 默认还是 `layer`，
+而 `peptide_bn` 是 4,686 口径下 sd 减半的那一版；`--esm-cache` 默认 `auto`，
+分层缓存建好后会把单层基线静默变成三层。三个默认值都会让"同一句话跑出两种实验"。
+
+**决定**（用户 2026-11-10"amph直接拼到基线中……我们先定好再跑"）：
+
+1. `ModelCfg.hand_extra` 默认 `'amphipath'` → 手工块 **704 维**（694 基础 + 10 μH）。
+   消融用 `--no-amphipath` 回 694。
+2. `ModelCfg.norm` 默认 `'peptide_bn'`（masked BN + 按肽等权）。`layer`/`masked_batch`/`batch`
+   仍可显式指定。
+3. `run_5fold.py --esm-cache` 默认 **`single`**；跑多层必须显式 `--esm-cache layers`。
+4. `embed_dim` 改为**从缓存读**（`cfg.model.embed_dim = emb.shape[-1]`），换 ESM 模型不用改配置。
+5. `ESMBackbone` 支持 `dtype='fp32'|'fp16'|'bf16'`，`low_cpu_mem_usage` 与 `device_map` 配对使用；
+   装不上 accelerate 时降级并 warn。**默认仍是 fp32**，因为现有 650M 缓存是 fp32 前向的产物，
+   用 fp16 重建会得到略有差异的嵌入，旧结果不可复现。
+
+**定版基线**：4,190 条 → 704 手工（逐折 z-score）+ 1280 单层 ESM 池化 → 拼接 **1984** →
+512 → 512 → 1，20.96 M 参数 / 80.0 MB，masked BN，无 EMA。
+
+**判据提醒**：单 seed 下 ΔAUPR < 0.015 视为无差别（5 折 sd 约 0.012–0.022）；对外报数必须
+同时给全集与固定 15 肽子集（D-12），与 HD-AIP 对比用 `eval_subset.py`（D-15）。
