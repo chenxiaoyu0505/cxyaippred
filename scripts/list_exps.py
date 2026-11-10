@@ -32,7 +32,7 @@ def load_index():
         rows.append({
             'exp': name, 'status': j.get('status', ''),
             'note': (j.get('extra') or {}).get('note', ''),
-            'ema': int(bool(st.get('ema'))), 'mcc_adaptive': int(bool(st.get('mcc_adaptive'))),
+            'ema': int(bool(st.get('ema'))),
             'epochs': st.get('epochs', ''), 'folds': '', 'seeds': '', 'n_runs': '',
             'auroc': '', 'aupr': '', 'mcc_val': '', 'created': j.get('created', ''),
             'path': 'experiments/%s' % name,
@@ -73,14 +73,13 @@ def main():
         print('还没有任何实验。先跑： python scripts/run_5fold.py --exp cv5')
         return
 
-    head = ('%-16s %-6s %-3s %-4s %-6s %-18s %-18s %-14s %s'
-            % ('实验', 'EMA', 'MCC', 'ep', 'runs', 'AUROC(free)', 'AUPR(free)', 'MCC(val)', '说明'))
+    head = ('%-16s %-6s %-4s %-6s %-18s %-18s %-14s %s'
+            % ('实验', 'EMA', 'ep', 'runs', 'AUROC(free)', 'AUPR(free)', 'MCC(val)', '说明'))
     print(head)
     print('-' * len(head))
     for r in rows:
-        print('%-16s %-6s %-3s %-4s %-6s %-18s %-18s %-14s %s' % (
+        print('%-16s %-6s %-4s %-6s %-18s %-18s %-14s %s' % (
             r.get('exp', ''), '开' if r.get('ema') in ('1', 1) else '关',
-            '开' if r.get('mcc_adaptive') in ('1', 1) else '关',
             r.get('epochs', ''), r.get('n_runs', ''),
             r.get('auroc', '') or '-', r.get('aupr', '') or '-',
             r.get('mcc_val', '') or '-', r.get('note', '') or ''))

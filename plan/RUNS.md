@@ -13,7 +13,7 @@
 | # | 日期 | exp | 命令要点 | 状态 | 结果目录 | 一句话结论 |
 |---|---|---|---|---|---|---|
 | 1 | 2026-11-09 17:38 | `cv5` | 默认参数（无 EMA、无 MCC、无噪声、seed 0） | **完成** | `experiments/cv5/` | AUROC 0.7277±0.0130 / AUPR 0.6494±0.0103；单折主表 |
-| 2 | 2026-11-09 18:43 | `cv5_full` | `--ema --mcc-adaptive` | **完成** | `experiments/cv5_full/` | AUROC 0.7316±0.0060 / AUPR 0.6525±0.0049；但 MCC@0.5 降至 0.2505，校准变差 |
+| 2 | 2026-11-09 18:43 | `cv5_full` | `--ema --mcc-adaptive`（历史，MCC 已移除） | **完成** | `experiments/cv5_full/` | AUROC 0.7316±0.0060 / AUPR 0.6525±0.0049；但 MCC@0.5 降至 0.2505，校准变差 |
 
 状态取值：`运行中` / `完成` / `失败` / `中止`。
 
@@ -38,7 +38,7 @@
   | epochs / batch / lr | 50 / 16 / 1e-4 |
   | patience（val AUPR 早停） | 10 |
   | EMA-SAT | 关 |
-  | MCC 类权重 | 关 |
+  | MCC 类权重（已移除） | 关（当时未启用） |
   | label-noise | 0 |
   | device | `auto` → cuda |
 
@@ -64,7 +64,9 @@
   - 与旧 AIP 头（AUROC 0.7336 / AUPR 0.6089 / MCC 0.3988@0.487）比：AUROC 略低、AUPR 略高、MCC 低约 0.04；先作为新管线基线，不据此下结论。
   - **异常**：早期 `summary.md` 里的 `lofo_ensemble`（AUROC 0.8932）已确认是泄漏（评 fold k 时平均了见过 fold k 的模型），已从 `eval_aip.py` 删除；该数字不得引用。
 
-### #2 `cv5_full` —— EMA-SAT + MCC 自适应（旧 IDPP 配方）
+### #2 `cv5_full` —— EMA-SAT + MCC 自适应（旧 IDPP 配方；历史记录）
+
+> **2026-11-10 更新**：MCC 自适应类权重已从代码中移除，下面的 `--mcc-adaptive` 命令仅作历史存档，不能再执行。当前只保留 EMA-SAT，并修正了首次命中、decay、warmup 与更新时机。
 
 - **启动时间**：2026-11-09 18:43
 - **命令**：
@@ -93,12 +95,11 @@
 
 | 顺序 | exp | 命令 | 为什么 |
 |---|---|---|---|
-| 2 | `cv5_ema` | `--ema` | EMA-SAT 有没有精度增益 |
-| 3 | `cv5_mcc` | `--mcc-adaptive` | MCC 加权有没有用、会不会来回摆 |
-| 4 | `cv5_full` | `--ema --mcc-adaptive` | 旧 IDPP 配方整体 |
-| 5 | `noise10` / `noise10_ema` | `--label-noise 0.10`（±`--ema`） | EMA 是否真的抗噪（判定规则见 DECISIONS.md） |
-| 6 | `legacy` | `run_legacy.py --exp legacy` | 与外部基线的公平对照线（4,224/462） |
-| 7 | `cv5_cluster` | 换聚类划分 | 回应 R1-4 的序列相似性泄漏（尚未实现） |
+| — | `cv5_ema` / `cv5_mcc` / `cv5_full` | 历史实验 | 已完成；`cv5_ema` 用的是未修正的 EMA，`cv5_mcc`/`cv5_full` 含已移除的 MCC，均只能当历史对照 |
+| 2 | `cv5_ema_fix` | `--ema` | 修正首次命中、decay 0.9、warmup 1 后，EMA 是否还有增益（建议先单折） |
+| 3 | `noise10` / `noise10_ema` | `--label-noise 0.10`（±`--ema`） | EMA 是否真的抗噪（判定规则见 DECISIONS.md） |
+| 4 | `legacy` | `run_legacy.py --exp legacy` | 与外部基线的公平对照线（4,224/462） |
+| 5 | `cv5_cluster` | 换聚类划分 | 回应 R1-4 的序列相似性泄漏（尚未实现） |
 
 ---
 

@@ -4,7 +4,7 @@ Anti-inflammatory peptide (AIP) prediction with protein language model embedding
 physicochemical descriptors — a small, auditable training/evaluation pipeline built for
 reproducible benchmarking rather than leaderboard chasing.
 
-**Status:** code complete and self-tested; no production training run yet in this repository.
+**Status:** code complete and self-tested; the clean 5-fold baseline is recorded in `experiments/cv5`.
 
 English | [中文](README.zh-CN.md)
 
@@ -17,9 +17,9 @@ Given a peptide sequence, predict whether it is anti-inflammatory.
 - **Representation** — frozen ESM-2 (`esm2_t33_650M_UR50D`, layer 33) + 694 handcrafted
   descriptors (AAC, GAAC, DPC, CKSAAGP, PAAC, CTD, 12 physicochemical properties)
 - **Head** — 2 residual 1D-conv blocks over the residue embeddings, masked mean pooling,
-  concatenation with the handcrafted vector, shared 512-d layer, per-task output
-- **Optional training tricks** (both off by default, both ablatable):
-  EMA self-distillation ("EMA-SAT") and MCC-guided class-weight adaptation
+  concatenation with the handcrafted vector, shared 512-d layer, single logit
+- **Optional training trick** (off by default, ablatable):
+  EMA self-distillation ("EMA-SAT")
 - **Evaluation** — fixed 5-fold splits, threshold-free metrics (AUROC/AUPR) reported
   alongside thresholded ones and bootstrap CIs
 
@@ -70,9 +70,7 @@ its SHA-256, and `scripts/make_5fold.py` reproduces it bit-for-bit from `data/ai
 python scripts/preflight.py                                   # data / splits / cache / weights / disk
 
 python scripts/run_5fold.py --exp cv5 --note "5-fold baseline"          # 5 folds, no extras
-python scripts/run_5fold.py --exp cv5_ema --ema                          # + EMA self-distillation
-python scripts/run_5fold.py --exp cv5_mcc --mcc-adaptive                 # + MCC class weighting
-python scripts/run_5fold.py --exp cv5_full --ema --mcc-adaptive          # both
+python scripts/run_5fold.py --exp cv5_ema_fix --ema                      # + EMA self-distillation
 
 python scripts/list_exps.py                                   # all experiments, one row each
 python scripts/list_exps.py --exp cv5_ema                     # per-fold detail
@@ -96,8 +94,7 @@ python scripts/predict.py --runs-dir experiments/cv5/runs --fasta peptides.fasta
 | Option | Meaning |
 |---|---|
 | `--exp NAME` | experiment id; required, `a-z0-9_-`, collisions refused |
-| `--ema` | enable EMA self-distillation (`--ema-alpha`, `--ema-decay`, `--ema-warmup`) |
-| `--mcc-adaptive` | enable MCC-guided class weights (`--mcc-interval`, `--mcc-rate`, `--mcc-ratio`, `--mcc-cooldown`) |
+| `--ema` | enable EMA self-distillation (`--ema-alpha`, `--ema-decay` default 0.9, `--ema-warmup` default 1) |
 | `--label-noise 0.1` | flip 10% of *training* labels (audited in `label_noise.json`) to probe robustness |
 | `--device auto` | `auto` → CUDA → MPS → CPU |
 | `--seeds 0,1,2` | model seeds (default `0`) |

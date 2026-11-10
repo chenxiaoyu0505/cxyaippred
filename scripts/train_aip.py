@@ -45,7 +45,7 @@ from src.data_io import (hand_feats, iter_batches, load_esm_cache,  # noqa: E402
                          load_folds, load_table)
 from src.ema_sat import EMASAT                             # noqa: E402
 from src.manifest import sha256_file                       # noqa: E402
-from src.metrics import confusion, threshold_free            # noqa: E402
+from src.metrics import threshold_free                       # noqa: E402
 from src.model_aip import AIPHead                          # noqa: E402
 from src.threshold import search_best_mcc                  # noqa: E402
 from src.utils import ensure_dir, pick_device, save_json, seed_everything  # noqa: E402
@@ -70,8 +70,7 @@ def predict_ordered(head, idx, emb, mask, hand, device, batch_size=64):
 # ---------------------------------------------------------------- 训练一步
 
 def train_epoch(head, opt, sat, tr_idx, emb, mask, hand, y, cfg, device,
-                pos_weight=None, cls_w=None):
-    """cls_w = (w_pos, w_neg)：逐样本的类权重；None = 不加权"""
+                pos_weight=None):
     head.train()
     perm_rng = np.random.RandomState(cfg.train.seed * 1000 + sat.epoch)
     order = tr_idx[perm_rng.permutation(len(tr_idx))]
@@ -85,13 +84,7 @@ def train_epoch(head, opt, sat, tr_idx, emb, mask, hand, y, cfg, device,
 
         logits = head(h, m, hf)
         target = sat.targets(b, yb).to(device)
-        wb = None
-        if cls_w is not None:
-            # 正负类各自的阈值权重（MCC 自适应会改它）
-            wb = torch.where(yb > 0.5,
-                             torch.full_like(yb, float(cls_w[0])),
-                             torch.full_like(yb, float(cls_w[1])))
-        loss = F.binary_cross_entropy_with_logits(logits, target, weight=wb,
+        loss = F.binary_cross_entropy_with_logits(logits, target,
                                                   pos_weight=pos_weight)
 
         opt.zero_grad(set_to_none=True)
@@ -100,7 +93,6 @@ def train_epoch(head, opt, sat, tr_idx, emb, mask, hand, y, cfg, device,
             torch.nn.utils.clip_grad_norm_(head.parameters(), cfg.train.grad_clip)
         opt.step()
 
-        sat.update(b, torch.sigmoid(logits.detach()))
         total += float(loss.item()) * len(b)
         n_seen += len(b)
 
@@ -127,18 +119,10 @@ def main():
     ap.add_argument('--pos-weight', type=float, default=0.0)
     ap.add_argument('--label-noise', type=float, default=0.0,
                     help='标签噪声注入比例（只翻训练行，对称翻转；默认 0=不动）')
-    ap.add_argument('--mcc-adaptive', action='store_true',
-                    help='启用 MCC 引导的类权重自适应（旧 IDPP 机制；依赖验证集）')
-    ap.add_argument('--mcc-interval', type=int, default=3)
-    ap.add_argument('--mcc-rate', type=float, default=0.15)
-    ap.add_argument('--class-weight-max', type=float, default=3.0)
-    ap.add_argument('--class-weight-min', type=float, default=0.3)
-    ap.add_argument('--mcc-ratio', type=float, default=1.2)
-    ap.add_argument('--mcc-cooldown', type=int, default=3)
     ap.add_argument('--ema', action='store_true', help='启用 EMA-SAT')
     ap.add_argument('--ema-alpha', type=float, default=0.7)
-    ap.add_argument('--ema-decay', type=float, default=0.99)
-    ap.add_argument('--ema-warmup', type=int, default=3)
+    ap.add_argument('--ema-decay', type=float, default=0.9)
+    ap.add_argument('--ema-warmup', type=int, default=1)
     ap.add_argument('--device', default='auto',
                     help='auto/cuda/mps/cpu，默认自动选择')
     ap.add_argument('--run-name', default='', help='默认 fold{k}_{split_id}_m{seed}')
@@ -160,13 +144,6 @@ def main():
     cfg.train.patience = args.patience
     cfg.train.pos_weight = args.pos_weight
     cfg.train.label_noise = args.label_noise
-    cfg.train.mcc_adaptive = args.mcc_adaptive
-    cfg.train.mcc_interval = args.mcc_interval
-    cfg.train.mcc_rate = args.mcc_rate
-    cfg.train.class_weight_max = args.class_weight_max
-    cfg.train.class_weight_min = args.class_weight_min
-    cfg.train.mcc_ratio = args.mcc_ratio
-    cfg.train.mcc_cooldown = args.mcc_cooldown
     cfg.train.device = args.device
     cfg.ema.enabled = args.ema
     cfg.ema.alpha = args.ema_alpha
@@ -244,16 +221,16 @@ def main():
     log_rows = []
     t0 = time.time()
 
-    # MCC 自适应类权重（默认关）：w = (w_pos, w_neg)，初始 1.0/1.0
-    cls_w = [1.0, 1.0]
-    w_hist = [{'epoch': -1, 'w_pos': 1.0, 'w_neg': 1.0}]
-    cooldown = 0
-
     for epoch in range(cfg.train.epochs):
         sat.set_epoch(epoch)
         loss = train_epoch(head, opt, sat, folds['train'], emb, mask, hand, y_fit,
-                           cfg, device, pos_weight,
-                           tuple(cls_w) if cfg.train.mcc_adaptive else None)
+                           cfg, device, pos_weight)
+
+        # 教师用 epoch 末、eval 模式的预测更新一次；避免 drop-out / 更新前 logits 噪声。
+        if cfg.ema.enabled:
+            train_p = predict_ordered(head, folds['train'], emb, mask, hand, device,
+                                      cfg.train.batch_size)
+            sat.update(folds['train'], train_p)
 
         val_p = predict_ordered(head, folds['val'], emb, mask, hand, device,
                                 cfg.train.batch_size)
@@ -266,44 +243,13 @@ def main():
                'ema_std': st['ema_std'], 'ema_seen': st['seen'],
                'ema_active': int(sat.active), 'seconds': round(time.time() - t0, 1)}
 
-        # ---- MCC 引导的类权重调整（只看验证集；与早停、选阈值一起构成"val 多用"）----
-        if cfg.train.mcc_adaptive:
-            yv = y[folds['val']]
-            thr_ep = search_best_mcc(yv, val_p, cfg.threshold.lo,
-                                     cfg.threshold.hi, cfg.threshold.n)['threshold']
-            tp, fp, fn, tn = confusion(yv, val_p, thr_ep)
-            fn_rate = fn / max(fn + tp, 1)
-            fp_rate = fp / max(fp + tn, 1)
-            row.update({'thr_val': thr_ep, 'fn_rate': fn_rate,
-                        'fp_rate': fp_rate, 'w_pos': cls_w[0], 'w_neg': cls_w[1]})
-            if epoch % cfg.train.mcc_interval == 0 and cooldown == 0:
-                act = ''
-                if fn_rate > fp_rate * cfg.train.mcc_ratio:      # 漏检为主 → 抬正类
-                    cls_w[0] = min(cfg.train.class_weight_max,
-                                   cls_w[0] * (1 + cfg.train.mcc_rate))
-                    cls_w[1] = max(cfg.train.class_weight_min,
-                                   cls_w[1] * (1 - 0.3 * cfg.train.mcc_rate))
-                    act = 'pos+'
-                elif fp_rate > fn_rate * cfg.train.mcc_ratio:    # 误报为主 → 抬负类
-                    cls_w[1] = min(cfg.train.class_weight_max,
-                                   cls_w[1] * (1 + cfg.train.mcc_rate))
-                    cls_w[0] = max(cfg.train.class_weight_min,
-                                   cls_w[0] * (1 - 0.3 * cfg.train.mcc_rate))
-                    act = 'neg+'
-                if act:
-                    cooldown = cfg.train.mcc_cooldown
-                    w_hist.append({'epoch': epoch, 'what': act,
-                                   'w_pos': round(cls_w[0], 4),
-                                   'w_neg': round(cls_w[1], 4),
-                                   'fn_rate': round(fn_rate, 4),
-                                   'fp_rate': round(fp_rate, 4)})
-                    if not args.quiet:
-                        print('\n  [w] ep%02d %s → pos %.3f / neg %.3f (fn %.3f fp %.3f)'
-                              % (epoch, act, cls_w[0], cls_w[1], fn_rate, fp_rate))
-                else:
-                    cooldown = 0
-            if cooldown > 0:
-                cooldown -= 1
+        if cfg.ema.enabled:
+            seen = sat.seen
+            soft = cfg.ema.alpha * y_fit + (1.0 - cfg.ema.alpha) * sat.ema
+            pos = seen & (y_fit > 0.5)
+            neg = seen & (y_fit <= 0.5)
+            row['soft_pos_mean'] = float(soft[pos].mean()) if pos.any() else 0.0
+            row['soft_neg_mean'] = float(soft[neg].mean()) if neg.any() else 0.0
 
         log_rows.append(row)
         if not args.quiet:
@@ -335,9 +281,6 @@ def main():
                'model_seed': cfg.train.seed,
                'split_sha256': cfg.data.split_sha256,
                'ema': bool(cfg.ema.enabled),
-               'mcc_adaptive': bool(cfg.train.mcc_adaptive),
-               'class_weights': {'w_pos': round(cls_w[0], 6),
-                                 'w_neg': round(cls_w[1], 6)},
                'best_epoch': best_epoch, 'val_aupr': best_aupr, **thr},
               os.path.join(run_dir, 'threshold.json'))
 
@@ -352,17 +295,6 @@ def main():
     pd.DataFrame({'row': np.arange(n), 'label': table['label'].values, 'prob': all_p}
                  ).to_csv(os.path.join(run_dir, 'all_probs.csv'), index=False)
     pd.DataFrame(log_rows).to_csv(os.path.join(run_dir, 'train_log.csv'), index=False)
-
-    # MCC 自适应：把权重轨迹单独存一份，方便审稿人核对"权重到底怎么动的"
-    if cfg.train.mcc_adaptive:
-        save_json({'enabled': True, 'interval': cfg.train.mcc_interval,
-                   'rate': cfg.train.mcc_rate, 'ratio': cfg.train.mcc_ratio,
-                   'bounds': [cfg.train.class_weight_min, cfg.train.class_weight_max],
-                   'final': {'w_pos': round(cls_w[0], 6), 'w_neg': round(cls_w[1], 6)},
-                   'history': w_hist},
-                  os.path.join(run_dir, 'class_weights.json'))
-        print('[%s] 类权重轨迹：pos %.3f / neg %.3f（%d 次调整）'
-              % (run_name, cls_w[0], cls_w[1], len(w_hist) - 1))
 
     save_head(head, os.path.join(run_dir, 'best.pt'), {
         'fold': cfg.fold, 'seed': cfg.train.seed,

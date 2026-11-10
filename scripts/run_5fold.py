@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 一条命令跑完 5 折：建缓存 → 逐折训练 → 汇总评估 → 登记 manifest。
@@ -19,7 +19,7 @@
 
 用法
 ----
-    python scripts/run_5fold.py                      # exp=cv5, seed 0, 5 折
+    python scripts/run_5fold.py --exp cv5             # seed 0, 5 折
     python scripts/run_5fold.py --exp cv5_ema --ema  # EMA 消融
     python scripts/run_5fold.py --seeds 0,1,2        # 3 个 model seed
     python scripts/run_5fold.py --skip-existing      # 断了接着跑
@@ -58,7 +58,7 @@ def _update_index(args, folds, seeds, exp_dir):
 
     idx_path = os.path.join(ROOT, 'experiments', '_index.csv')
     cols = ['exp', 'created', 'status', 'note', 'ema', 'ema_alpha',
-            'mcc_adaptive', 'epochs', 'folds', 'seeds', 'n_runs',
+            'epochs', 'folds', 'seeds', 'n_runs',
             'auroc', 'aupr', 'mcc_val', 'path']
 
     row = {
@@ -68,7 +68,6 @@ def _update_index(args, folds, seeds, exp_dir):
         'note': args.note,
         'ema': int(bool(args.ema)),
         'ema_alpha': args.ema_alpha if args.ema else '',
-        'mcc_adaptive': int(bool(args.mcc_adaptive)),
         'epochs': args.epochs,
         'folds': '%d' % len(folds),
         'seeds': '%d' % len(seeds),
@@ -114,7 +113,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--exp', required=True,
                     help='实验名（必填，决定产物目录 experiments/<exp>/）。'
-                         '建议：cv5 / cv5_full / cv5_ema / cv5_mcc / legacy；'
+                         '建议：cv5 / cv5_ema / legacy；'
                          '只能用小写字母、数字、下划线和短横线')
     ap.add_argument('--note', default='', help='一句话说明这次为什么跑，写进 manifest 与总表')
     ap.add_argument('--resume', action='store_true',
@@ -130,15 +129,8 @@ def main():
     ap.add_argument('--label-noise', type=float, default=0.0, help='标签噪声注入比例（只翻训练行）')
     ap.add_argument('--ema', action='store_true')
     ap.add_argument('--ema-alpha', type=float, default=0.7)
-    ap.add_argument('--ema-decay', type=float, default=0.99)
-    ap.add_argument('--ema-warmup', type=int, default=3)
-    ap.add_argument('--mcc-adaptive', action='store_true', help='启用 MCC 类权重自适应')
-    ap.add_argument('--mcc-interval', type=int, default=3)
-    ap.add_argument('--mcc-rate', type=float, default=0.15)
-    ap.add_argument('--mcc-ratio', type=float, default=1.2)
-    ap.add_argument('--mcc-cooldown', type=int, default=3)
-    ap.add_argument('--class-weight-min', type=float, default=0.3)
-    ap.add_argument('--class-weight-max', type=float, default=3.0)
+    ap.add_argument('--ema-decay', type=float, default=0.9)
+    ap.add_argument('--ema-warmup', type=int, default=1)
     ap.add_argument('--device', default='')
     ap.add_argument('--cache-dir', default='', help='ESM 缓存目录，默认 <root>/cache；'
                                                    '调试时可指向 _work\\fakecache')
@@ -154,7 +146,7 @@ def main():
     exp = args.exp.strip()
     if not _re.fullmatch(r'[a-z0-9][a-z0-9_\-]{1,40}', exp):
         raise SystemExit('实验名不合法：%r\n规则：小写字母/数字开头，只能含 a-z 0-9 _ -，2–41 个字符。'
-                         '\n例：--exp cv5   /   --exp cv5_full   /   --exp cv5_ema' % args.exp)
+                         '\n例：--exp cv5   /   --exp cv5_ema' % args.exp)
     args.exp = exp
     exp_dir_probe = os.path.join(ROOT, 'experiments', exp)
     runs_probe = os.path.join(exp_dir_probe, 'runs')
@@ -184,11 +176,6 @@ def main():
                                 ' (alpha=%.2f, decay=%.2f, warmup=%d)'
                                 % (args.ema_alpha, args.ema_decay, args.ema_warmup)
                                 if args.ema else ''))
-    print('MCC 自适应: %s%s' % ('开' if args.mcc_adaptive else '关',
-                                ' (interval=%d, rate=%.2f, ratio=%.2f, cooldown=%d, bounds=[%.2f, %.2f])'
-                                % (args.mcc_interval, args.mcc_rate, args.mcc_ratio,
-                                   args.mcc_cooldown, args.class_weight_min, args.class_weight_max)
-                                if args.mcc_adaptive else ''))
     print('超参      : epochs=%d batch=%d lr=%g patience=%d pos_weight=%g'
           % (args.epochs, args.batch_size, args.lr, args.patience, args.pos_weight))
     if args.note:
@@ -233,21 +220,13 @@ def main():
                    '--epochs', str(args.epochs), '--batch-size', str(args.batch_size),
                    '--lr', str(args.lr), '--patience', str(args.patience),
                    '--pos-weight', str(args.pos_weight),
-                '--label-noise', str(args.label_noise),
+                   '--label-noise', str(args.label_noise),
                    '--ema-alpha', str(args.ema_alpha),
                    '--ema-decay', str(args.ema_decay),
                    '--ema-warmup', str(args.ema_warmup),
-                   '--cache-dir', cache_dir,
-                   '--mcc-interval', str(args.mcc_interval),
-                   '--mcc-rate', str(args.mcc_rate),
-                   '--mcc-ratio', str(args.mcc_ratio),
-                   '--mcc-cooldown', str(args.mcc_cooldown),
-                   '--class-weight-min', str(args.class_weight_min),
-                   '--class-weight-max', str(args.class_weight_max)]
+                   '--cache-dir', cache_dir]
             if args.ema:
                 cmd.append('--ema')
-            if args.mcc_adaptive:
-                cmd.append('--mcc-adaptive')
             if args.device:
                 cmd += ['--device', args.device]
             run(cmd, '训练 fold%d / seed%d' % (k, seed))
@@ -281,12 +260,7 @@ def main():
                          'lr': args.lr, 'patience': args.patience,
                          'pos_weight': args.pos_weight, 'label_noise': args.label_noise, 'ema': args.ema,
                          'ema_alpha': args.ema_alpha, 'ema_decay': args.ema_decay,
-                         'ema_warmup': args.ema_warmup,
-                         'mcc_adaptive': args.mcc_adaptive,
-                         'mcc_interval': args.mcc_interval, 'mcc_rate': args.mcc_rate,
-                         'mcc_ratio': args.mcc_ratio, 'mcc_cooldown': args.mcc_cooldown,
-                         'class_weight_min': args.class_weight_min,
-                         'class_weight_max': args.class_weight_max},
+                         'ema_warmup': args.ema_warmup},
             'note': args.note,
             'configs': [os.path.relpath(c, ROOT).replace('\\', '/') for c in cfgs],
             'seconds': round(time.time() - t_all, 1),

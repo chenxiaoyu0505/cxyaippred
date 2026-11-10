@@ -7,7 +7,7 @@ EMA-SAT（自自适应训练）的教师目标。
 --------------------------------
     ema_i  ← decay · ema_i + (1 − decay) · p_i        # 逐样本概率的滑动平均
     soft_i = alpha · y_i + (1 − alpha) · ema_i        # 教师标签
-默认 decay = 0.99、alpha = 0.7 —— 注意 **alpha=0.7 意味着 70% 仍是硬标签**，
+默认 decay = 0.9、alpha = 0.7 —— 注意 **alpha=0.7 意味着 70% 仍是硬标签**，
 只有 30% 来自历史预测，不要把"自蒸馏"想得太强。
 
 这里的实现要点
@@ -19,18 +19,19 @@ EMA-SAT（自自适应训练）的教师目标。
 
 用法
 ----
-    sat = EMASAT(n_samples, alpha=0.7, decay=0.99, warmup_epochs=3, enabled=True)
+    sat = EMASAT(n_samples, alpha=0.7, decay=0.9, warmup_epochs=1, enabled=True)
     sat.set_epoch(epoch)
-    soft = sat.targets(idx, y_batch)      # 前向之前
+    soft = sat.targets(idx, y_batch)      # 每个 batch 前向之前
     ... loss = BCE(logits, soft) ...
-    sat.update(idx, probs.detach())       # 反向之后
+    # 推荐在 epoch 末用 eval 模式对 train 全集预测一次，再统一更新：
+    sat.update(train_idx, probs_eval)
 """
 import numpy as np
 import torch
 
 
 class EMASAT:
-    def __init__(self, n_samples, alpha=0.7, decay=0.99, warmup_epochs=3,
+    def __init__(self, n_samples, alpha=0.7, decay=0.9, warmup_epochs=1,
                  enabled=True, dtype=np.float32):
         self.alpha = float(alpha) if enabled else 1.0
         self.decay = float(decay)
@@ -75,12 +76,21 @@ class EMASAT:
         soft = np.where(self.seen[i], soft, y)
         return torch.as_tensor(soft.astype(np.float32), dtype=torch.float32)
 
-    # ------------------------------------------------------------ 反向之后
+    # ------------------------------------------------------------ 更新（推荐 epoch 末）
     def update(self, idx, probs):
+        if not self.enabled:
+            return
         i = np.asarray(idx, dtype=np.int64)
         p = probs.detach().float().cpu().numpy() if isinstance(probs, torch.Tensor) \
             else np.asarray(probs, dtype=np.float32)
-        self.ema[i] = self.decay * self.ema[i] + (1.0 - self.decay) * p
+        p = np.clip(p, 1e-3, 1.0 - 1e-3)
+
+        # 首次命中直接写入当前预测；否则 0.5 先验会一直稀释 EMA。
+        fresh = ~self.seen[i]
+        self.ema[i[fresh]] = p[fresh]
+        old = ~fresh
+        self.ema[i[old]] = (self.decay * self.ema[i[old]]
+                            + (1.0 - self.decay) * p[old])
         self.seen[i] = True
 
     # ------------------------------------------------------------ 诊断

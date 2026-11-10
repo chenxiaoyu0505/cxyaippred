@@ -6,7 +6,6 @@ experiments\
     runs\
       fold0_m0\      best.pt / config.json / split.csv / val_probs.csv
                      test_probs.csv / all_probs.csv / train_log.csv / threshold.json
-                     （开了 --mcc-adaptive 时多一个 class_weights.json）
       fold1_m0\ ...
     results\         metrics_detail.csv / metrics.json / summary.md
     manifest.json    数据与划分的 sha256、代码哈希、环境、耗时

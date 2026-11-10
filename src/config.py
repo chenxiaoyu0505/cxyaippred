@@ -58,8 +58,8 @@ class EMACfg:
     """EMA-SAT：教师目标 = α·硬标签 + (1−α)·历史概率 EMA"""
     enabled: bool = False
     alpha: float = 0.7        # 硬标签占比；α=1.0 等价于纯硬标签
-    decay: float = 0.99       # 逐样本概率的滑动平均系数
-    warmup_epochs: int = 3    # 前几个 epoch 只用硬标签
+    decay: float = 0.9        # 逐样本概率的滑动平均系数；0.99 在 15–20 epoch 内近似不动
+    warmup_epochs: int = 1    # 前几个 epoch 只用硬标签
 
 
 @dataclass
@@ -77,15 +77,6 @@ class TrainCfg:
 
     # ---- 标签噪声注入（默认 0 = 不动标签；用于检验抗噪性，只翻训练行） ----
     label_noise: float = 0.0  # 对称翻转比例：随机把 label 0<->1
-
-    # ---- MCC 引导的类权重自适应（旧 IDPP 的机制，默认关，消融用） ----
-    mcc_adaptive: bool = False   # 开启后每 mcc_interval 轮按 val 的 FN/FP 率改类权重
-    mcc_interval: int = 3        # 每隔几轮调一次
-    mcc_rate: float = 0.15       # 加权的相对步长（×1+rate）
-    class_weight_max: float = 3.0
-    class_weight_min: float = 0.3
-    mcc_ratio: float = 1.2       # fn_rate > ratio·fp_rate 才判为"漏检为主"
-    mcc_cooldown: int = 3        # 调完之后冷却的轮数
 
 
 @dataclass
@@ -123,17 +114,23 @@ class RunCfg:
             json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
         return path
 
+    @staticmethod
+    def _sub(cls, data):
+        """只接收当前 dataclass 认识的键，兼容旧实验里已删除的字段。"""
+        return cls(**{k: v for k, v in data.items()
+                      if k in cls.__dataclass_fields__})
+
     @classmethod
     def load(cls, path):
         with open(path, 'r', encoding='utf-8') as f:
             d = json.load(f)
         return cls(
-            esm=ESMCfg(**d.get('esm', {})),
-            model=ModelCfg(**d.get('model', {})),
-            data=DataCfg(**d.get('data', {})),
-            ema=EMACfg(**d.get('ema', {})),
-            train=TrainCfg(**d.get('train', {})),
-            threshold=ThresholdCfg(**d.get('threshold', {})),
+            esm=cls._sub(ESMCfg, d.get('esm', {})),
+            model=cls._sub(ModelCfg, d.get('model', {})),
+            data=cls._sub(DataCfg, d.get('data', {})),
+            ema=cls._sub(EMACfg, d.get('ema', {})),
+            train=cls._sub(TrainCfg, d.get('train', {})),
+            threshold=cls._sub(ThresholdCfg, d.get('threshold', {})),
             fold=d.get('fold', 0),
             exp=d.get('exp', ''),
         )

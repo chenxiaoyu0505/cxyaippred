@@ -3,7 +3,7 @@
 抗炎肽（AIP, anti-inflammatory peptide）活性预测：蛋白质语言模型表征 + 理化描述符，
 一条小而可审计的训练/评估管线，目标是可复现的基准对比，而不是刷新排行榜。
 
-**状态**：代码完成并通过自检；本仓库尚未承载正式训练产物。
+**状态**：代码完成并通过自检；干净 5 折基线见 `experiments/cv5`。
 
 [English](README.md) | 中文
 
@@ -17,8 +17,8 @@
   （AAC、GAAC、DPC、CKSAAGP、PAAC、CTD、12 项理化性质）
 - **头部** —— 残基级嵌入上两层残差一维卷积，掩码均值池化，与手工特征拼接，
   共享 512 维层，输出单值 logit
-- **两个可选训练技巧**（默认都关，都可独立消融）：
-  EMA 自蒸馏（EMA-SAT）与 MCC 引导的类权重自适应
+- **可选训练技巧**（默认关闭，可独立消融）：
+  EMA 自蒸馏（EMA-SAT）
 - **评估** —— 固定 5 折划分；阈值无关指标（AUROC/AUPR）与阈值相关指标并列报告；
   bootstrap 置信区间
 
@@ -67,9 +67,7 @@ python scripts/check_env.py
 python scripts/preflight.py                                    # 数据 / 划分 / 缓存 / 权重 / 磁盘
 
 python scripts/run_5fold.py --exp cv5 --note "5 折基线"                  # 5 折，不加技巧
-python scripts/run_5fold.py --exp cv5_ema --ema                          # + EMA 自蒸馏
-python scripts/run_5fold.py --exp cv5_mcc --mcc-adaptive                 # + MCC 类权重
-python scripts/run_5fold.py --exp cv5_full --ema --mcc-adaptive          # 两者都开
+python scripts/run_5fold.py --exp cv5_ema_fix --ema                      # + EMA 自蒸馏
 
 python scripts/list_exps.py                                   # 所有实验，一行一个
 python scripts/list_exps.py --exp cv5_ema                     # 单个实验的逐折明细
@@ -93,8 +91,7 @@ python scripts/predict.py --runs-dir experiments/cv5/runs --fasta peptides.fasta
 | 参数 | 含义 |
 |---|---|
 | `--exp NAME` | 实验名，必填，仅 `a-z0-9_-`，重名拒绝 |
-| `--ema` | 开启 EMA 自蒸馏（`--ema-alpha`、`--ema-decay`、`--ema-warmup`） |
-| `--mcc-adaptive` | 开启 MCC 引导类权重（`--mcc-interval`、`--mcc-rate`、`--mcc-ratio`、`--mcc-cooldown`） |
+| `--ema` | 开启 EMA 自蒸馏（`--ema-alpha`、`--ema-decay` 默认 0.9、`--ema-warmup` 默认 1） |
 | `--label-noise 0.1` | 翻转 10% 的**训练**标签（逐条记录在 `label_noise.json`），用于检验抗噪性 |
 | `--device auto` | `auto` → CUDA → MPS → CPU |
 | `--seeds 0,1,2` | 模型种子（默认 `0`） |

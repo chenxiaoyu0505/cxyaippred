@@ -24,7 +24,7 @@
 理由：R1-1、R1-2 以及 mask/部分标注相关问题会一次性消失；而且 AIP 这一半数据本身是干净的。
 
 代价也写在这里：多任务 + 部分标注 + 双向肽是原稿的主要"新颖性"来源，
-删掉之后方法只剩 EMA-SAT + MCC 加权 + ESM-2/手工特征融合，需要重新论证它凭什么发表。
+删掉之后方法只剩 EMA-SAT + ESM-2/手工特征融合，需要重新论证它凭什么发表。
 
 ---
 
@@ -53,7 +53,7 @@
 | 层 | 占单折 | 行数 | 用途 |
 |---|---|---|---|
 | test | 20% | 937 | 只评一次，不得用于任何选择 |
-| val | 16% | 750 | 早停、选阈值、调 MCC 类权重 |
+| val | 16% | 750 | 早停、选阈值 |
 | train | 64% | 2,999 | 梯度更新、EMA |
 
 `val : train = 20 : 80`，与原稿一致。详见 `data/FOLDS.md`。
@@ -153,11 +153,13 @@ experiments\<exp>\
 - [x] 命令行 `--label-noise`（默认 0）：训练行对称翻转标签，逐条记录到 `label_noise.json`
 - [x] 中文 README（`README.zh-CN.md`）与英文版互链
 - [x] **`cv5` 5 折基线**（2026-11-09 17:52 完成）：AUROC 0.7277 ± 0.0130 / AUPR 0.6494 ± 0.0103 / MCC@val 0.3580 ± 0.0259；结果在 `experiments/cv5/results/`，详见 `plan/RUNS.md`
-- [x] **`cv5_full` 5 折（EMA+MCC）**（2026-11-09 19:03 完成）：AUROC 0.7316 ± 0.0060 / AUPR 0.6525 ± 0.0049；但 MCC@0.5 降至 0.2505、ECE 升至 0.182，需拆分 EMA/MCC
+- [x] **`cv5_full` 5 折（EMA+MCC）**（2026-11-09 19:03 完成）：AUROC 0.7316 ± 0.0060 / AUPR 0.6525 ± 0.0049；但 MCC@0.5 降至 0.2505、ECE 升至 0.182
+- [x] **EMA / MCC 单独拆分**（2026-11-09 20:14 / 20:41）：`cv5_ema` AUROC 0.7280 / AUPR 0.6513，`cv5_mcc` AUROC 0.7208 / AUPR 0.6421；两者都没有显著增益，MCC 已移除
+- [ ] **修正版 EMA**（首次命中、decay 0.9、warmup 1、epoch 末更新）待跑 `cv5_ema_fix`
 
 ### 没做
 
-- [ ] 除 `cv5` / `cv5_full` 外没有其他实验；EMA 与 MCC 尚未单独拆分（噪声梯度 / legacy 对照均未跑）
+- [ ] 噪声梯度 / legacy 对照均未跑
 - [ ] 模型创新（用户 2026-11-09 说"准备好了我们再看看模型如何创新"）
 - [ ] 论文文本的对应修改（另一条线，见 `D:\BIP\module4\BIB\待修问题清单_1109.md`）
 - [ ] `plan/RUNS.md` 之外的 run 台账尚未建立（每次跑完必须补一行）
@@ -173,20 +175,16 @@ set PY=D:\anaconda3\envs\esm2_env\python.exe
 :: 主实验：5 折 × 1 seed，用完自动删 ESM 缓存
 %PY% scripts\run_5fold.py --exp cv5 --epochs 50
 
-:: 旧 IDPP 配方（EMA-SAT + MCC 类权重自适应）——两者都是 opt-in
-%PY% scripts\run_5fold.py --exp cv5_full --ema --mcc-adaptive --epochs 50
-
-:: 单项消融
-%PY% scripts\run_5fold.py --exp cv5_ema   --ema --epochs 50
-%PY% scripts\run_5fold.py --exp cv5_mcc   --mcc-adaptive --epochs 50
+:: EMA-SAT（默认关闭，显式 --ema 才开；decay 0.9 / warmup 1）
+%PY% scripts\run_5fold.py --exp cv5_ema_fix --ema --epochs 50
 
 :: 与原 462 条测试集并表的对照线
 %PY% scripts\run_legacy.py --exp legacy
 ```
 
-**EMA-SAT 与 MCC 类权重都默认关闭**，必须显式 `--ema` / `--mcc-adaptive` 才开。
-两者都会在 `train_log.csv` 留下逐 epoch 证据（`ema_active`、`w_pos/w_neg/fn_rate/fp_rate`），
-MCC 那条还会额外写 `class_weights.json`（权重轨迹），审稿人问"权重到底怎么动的"可以直接给。
+**EMA-SAT 默认关闭**，必须显式 `--ema` 才开；MCC 自适应类权重已于 2026-11-10 移除。
+EMA 会在 `train_log.csv` 留下逐 epoch 证据（`ema_active`、`ema_mean`、`ema_std`、
+`soft_pos_mean`、`soft_neg_mean`），可直接检查 teacher 是否还卡在 0.5 附近。
 
 单折手跑（调试用）：
 
@@ -214,9 +212,8 @@ MCC 那条还会额外写 `class_weights.json`（权重轨迹），审稿人问"
 | 名字 | 含义 |
 |---|---|
 | `cv5` | 5 折主实验，什么都不开 |
-| `cv5_full` | 旧 IDPP 配方：`--ema --mcc-adaptive` |
-| `cv5_ema` / `cv5_mcc` | 单项消融 |
-| `cv5_mcc_i5` | MCC 间隔改 5 的敏感性分析（`--mcc-interval 5`） |
+| `cv5_ema_fix` | EMA-SAT 修正版（`--ema`，decay 0.9 / warmup 1） |
+| `cv5_ema` | 旧 EMA 实现的历史对照，不再新跑 |
 | `legacy` | 原 4,224/462 划分，和外部基线并表用 |
 | `dbg0` / `smoke*` | 调试，看完就删 |
 
@@ -225,19 +222,19 @@ MCC 那条还会额外写 `class_weights.json`（权重轨迹），审稿人问"
 三层，随便看哪层都能对上：
 
 1. **目录**：`experiments\<exp>\runs\fold{k}_m{seed}\`——实验名 + 折号 + seed 全在路径里。
-2. **单 run 内**：`config.json` 存全部超参（含 `ema`、`mcc_adaptive`、`split_sha256`）、`threshold.json` 存阈值与实际开关、`train_log.csv` 逐 epoch 记录。
+2. **单 run 内**：`config.json` 存全部超参（含 `ema`、`split_sha256`）、`threshold.json` 存阈值与实际开关、`train_log.csv` 逐 epoch 记录。
 3. **总表**：`experiments\_index.csv`（每次跑完自动登记）或直接
 
 ```bat
-%PY% scripts\list_exps.py                    :: 所有实验一行一个，含 EMA/MCC 开关与主指标
+%PY% scripts\list_exps.py                    :: 所有实验一行一个，含 EMA 开关与主指标
 %PY% scripts\list_exps.py --exp cv5_ema      :: 单个实验的明细表
 ```
 
 总表长这样（冒烟数据，指标无意义）：
 
 ```
-实验               EMA    MCC ep   runs   AUROC(free)        AUPR(free)         MCC(val)       说明
-t_demo_mcc       关      开   1    1      0.5962±0.0000      0.5195±0.0000      0.2018±0.0000  冒烟：MCC 开
+实验               EMA    ep   runs   AUROC(free)        AUPR(free)         MCC(val)       说明
+t_demo_ema       开     1    1      0.5962±0.0000      0.5195±0.0000      0.2018±0.0000  冒烟：EMA 开
 ```
 
 ---
