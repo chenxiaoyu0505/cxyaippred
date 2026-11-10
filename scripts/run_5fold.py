@@ -261,18 +261,22 @@ def main():
 
     # ---- 2. 缓存 ----
     from src.cache_util import clean_cache, has_cache   # noqa: E402
+    from src.data_io import load_table                  # noqa: E402
     cache_dir = args.cache_dir or os.path.join(ROOT, 'cache')
     if not os.path.isabs(cache_dir):
         cache_dir = os.path.join(ROOT, cache_dir)
-    need_build = args.rebuild_cache or not has_cache(cache_dir)
+    n_data = len(load_table(data_csv))
+    need_build = args.rebuild_cache or not has_cache(cache_dir, expected_n=n_data)
     if need_build:
-        cmd = [PY, os.path.join(HERE, 'cache_esm.py'), '--cache-dir', cache_dir]
+        cmd = [PY, os.path.join(HERE, 'cache_esm.py'),
+               '--data', data_csv, '--cache-dir', cache_dir]
         if args.esm_name:
             cmd += ['--esm-name', args.esm_name]
         if args.esm_dtype:
             cmd += ['--dtype', args.esm_dtype]
-        if args.rebuild_cache:
-            cmd.append('--force')
+        # 走到这里说明缓存缺失或 meta 语义过期；必须 --force，
+        # 否则 cache_esm 看到旧 emb 会直接 return。
+        cmd.append('--force')
         run(cmd, '生成 ESM 缓存（约 0.9 GB，5–10 分钟）')
     else:
         print('\n[2/5] ESM 缓存已存在，直接使用')

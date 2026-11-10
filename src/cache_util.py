@@ -13,15 +13,38 @@ ESM_FILES = ('esm_emb_fp16.npy', 'esm_mask.npy', 'esm_index.csv', 'esm_meta.json
 # 存在时 load_esm_cache 优先用多层（meta 里 layout 会说明是哪一种）。
 EMB_ALIASES = ('esm_emb_layers_fp16.npy', 'esm_emb_fp16.npy')
 
+import json  # noqa: E402
 import os  # noqa: E402
 
 
-def has_cache(cache_dir):
-    """mask / index 齐了、且两种 emb 至少有一个，才算有缓存"""
+def _read_meta(cache_dir):
+    p = os.path.join(cache_dir, 'esm_meta.json')
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def has_cache(cache_dir, expected_n=None):
+    """mask / index / meta 语义齐了、且两种 emb 至少有一个，才算有缓存。
+
+    ``expected_n`` 给出时还会校验 meta 里的 ``n_rows``，避免 4,686 行旧缓存
+    被拿去配 4,634 行新表。
+    """
     ok = all(os.path.exists(os.path.join(cache_dir, fn))
-             for fn in ('esm_mask.npy', 'esm_index.csv'))
+             for fn in ('esm_mask.npy', 'esm_index.csv', 'esm_meta.json'))
     emb = any(os.path.exists(os.path.join(cache_dir, fn)) for fn in EMB_ALIASES)
-    return ok and emb
+    meta = _read_meta(cache_dir)
+    if not (ok and emb and meta):
+        return False
+    if meta.get('mask') != 'residues_only_v1':
+        return False
+    if expected_n is not None and meta.get('n_rows') != expected_n:
+        return False
+    return True
 
 
 def cache_size_mb(cache_dir):
