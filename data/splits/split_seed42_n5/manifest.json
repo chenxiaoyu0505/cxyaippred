@@ -1,53 +1,61 @@
 {
   "experiment": "split_seed42_n5",
-  "created": "2026-11-09T15:20:19",
+  "created": "2026-11-10T21:21:20",
   "status": "ready",
   "data": {
     "file": "data/aip_all.csv",
-    "n": 4686,
-    "pos": 1840,
-    "sha256": "5f3eb4b194eadeb30dfa9a26cc8104df5e52d774369415fb0e49eb4d9acaa78c"
+    "n": 4190,
+    "pos": 1635,
+    "sha256": "2303dbc3de9bc07a0ca772f76e02f111945106193d25fd4eaf7d9977151dda33"
   },
   "split": {
     "file": "data/splits/split_seed42_n5/folds.csv",
-    "sha256": "4b17ee05f73e836363ad7d0973c3c68e30821b8b902167fd7cd151584ceb57f3"
+    "sha256": "d37f8c16f10e06ddc1eca17e8f5284cebb39f8c47f37d3b6a15f06c9f2058547"
   },
   "code": {
     "src/__init__.py": "997259f1d19c9421",
-    "src/checkpoint.py": "c464ebce128f263c",
-    "src/config.py": "db99fedcb835455b",
-    "src/data_io.py": "7293fb07d8a1dedd",
-    "src/ema_sat.py": "9e9287f62b2e02e4",
-    "src/esm_backbone.py": "2566ba4e7871ccf8",
-    "src/features.py": "891ca35ef4687d2e",
+    "src/cache_util.py": "ccf711e784119d54",
+    "src/cfc.py": "62e853178c28c891",
+    "src/checkpoint.py": "16bb64e5a4b2b7b6",
+    "src/config.py": "5dfa4df536e15061",
+    "src/data_io.py": "5e8ad5baa1c188bd",
+    "src/ema_sat.py": "05121a91bae4a604",
+    "src/esm_backbone.py": "8d209da8930ded76",
+    "src/features.py": "ae19b10ed5a14213",
     "src/manifest.py": "f998fac19e1a9a59",
     "src/metrics.py": "7c4baa57304f86b9",
-    "src/model_aip.py": "be0843fe7f71ed2c",
+    "src/model_aip.py": "8792e6362e11c8c9",
     "src/threshold.py": "410a5cb6db988aeb",
-    "src/utils.py": "259e1980322caf8f",
-    "scripts/cache_esm.py": "0183ca5916eea6af",
+    "src/utils.py": "bde501c6f0a39631",
+    "scripts/cache_esm.py": "24c9bff05e7e72a8",
+    "scripts/check_env.py": "5b43b8f6757671fd",
     "scripts/convert_legacy_head.py": "11ad23a813658dd3",
-    "scripts/eval_aip.py": "dbbf6196849369b7",
+    "scripts/eval_aip.py": "dbe598f26386d223",
+    "scripts/list_exps.py": "d27dfafeceb168cd",
     "scripts/make_5fold.py": "834f817b10a7bd5f",
     "scripts/make_aip_dataset.py": "4789d02759457c18",
-    "scripts/predict.py": "2d63917c4cc04bb4",
-    "scripts/run_5fold.py": "1d30424d83001fb8",
-    "scripts/run_legacy.py": "95da5ebea78236d9",
-    "scripts/selftest.py": "3203c231993833bf",
-    "scripts/train_aip.py": "be2b83fe3ae0674f",
-    "scripts/legacy_multitask/eval.py": "1964fde29bcfbd45",
-    "scripts/legacy_multitask/extract_handcraft_features.py": "8cc9c176070f7793",
-    "scripts/legacy_multitask/features.py": "891ca35ef4687d2e",
-    "scripts/legacy_multitask/models.py": "464f88a30ceab996",
+    "scripts/predict.py": "68d58b28484f151c",
+    "scripts/preflight.py": "2f6f3d8d37e8cd72",
+    "scripts/register_exp.py": "74933ff07f7a0884",
+    "scripts/run_5fold.py": "d500a6454fea0b5a",
+    "scripts/run_legacy.py": "711d8753ce5f9103",
+    "scripts/selftest.py": "a3e6257f003f380b",
+    "scripts/train_aip.py": "d7fe6f2fa842fb10",
+    "scripts/legacy_multitask/eval.py": "e4e7f8066650e82a",
+    "scripts/legacy_multitask/extract_handcraft_features.py": "93a992e8464fd9a9",
+    "scripts/legacy_multitask/features.py": "9ce3d6b2b6206d83",
+    "scripts/legacy_multitask/models.py": "5aaaa0d6d84579dd",
     "scripts/legacy_multitask/predict_peps.py": "bcafe2062e86c86e",
-    "scripts/legacy_multitask/train.py": "b2737d2e0d015142",
-    "scripts/legacy_multitask/utils.py": "dfd3405d0bb2232f"
+    "scripts/legacy_multitask/train.py": "77c3c269d649046f",
+    "scripts/legacy_multitask/utils.py": "e59cb2ea759ae0d6"
   },
   "env": {
-    "python": "3.11.14",
-    "platform": "Windows-10-10.0.26200-SP0",
-    "executable": "D:\\anaconda3\\envs\\esm2_env\\python.exe",
-    "torch": "unavailable: [WinError 1114] 动态链接库(DLL)初始化例程失败。 Error loading \"D:\\anaconda3\\envs\\esm2_env\\Lib\\site-packages\\torch\\lib\\c10.dll\" or one of its dependencies."
+    "python": "3.11.16",
+    "platform": "macOS-27.2-arm64-arm-64bit",
+    "executable": "/Users/chenxiaoyu/Documents/cxyaippred/.venv/bin/python",
+    "torch": "2.15.0",
+    "cuda": null,
+    "cuda_available": false
   },
   "kind": "split",
   "split_seed": 42,
@@ -62,76 +70,76 @@
     {
       "fold": 0,
       "train": {
-        "n": 2998,
-        "pos": 1177
+        "n": 2681,
+        "pos": 1046
       },
       "val": {
-        "n": 750,
-        "pos": 295
+        "n": 671,
+        "pos": 262
       },
       "test": {
-        "n": 938,
-        "pos": 368
+        "n": 838,
+        "pos": 327
       }
     },
     {
       "fold": 1,
       "train": {
-        "n": 2999,
-        "pos": 1178
+        "n": 2681,
+        "pos": 1046
       },
       "val": {
-        "n": 750,
-        "pos": 294
+        "n": 671,
+        "pos": 262
       },
       "test": {
-        "n": 937,
-        "pos": 368
+        "n": 838,
+        "pos": 327
       }
     },
     {
       "fold": 2,
       "train": {
-        "n": 2999,
-        "pos": 1178
+        "n": 2681,
+        "pos": 1046
       },
       "val": {
-        "n": 750,
-        "pos": 294
+        "n": 671,
+        "pos": 262
       },
       "test": {
-        "n": 937,
-        "pos": 368
+        "n": 838,
+        "pos": 327
       }
     },
     {
       "fold": 3,
       "train": {
-        "n": 2999,
-        "pos": 1178
+        "n": 2681,
+        "pos": 1046
       },
       "val": {
-        "n": 750,
-        "pos": 294
+        "n": 671,
+        "pos": 262
       },
       "test": {
-        "n": 937,
-        "pos": 368
+        "n": 838,
+        "pos": 327
       }
     },
     {
       "fold": 4,
       "train": {
-        "n": 2999,
-        "pos": 1178
+        "n": 2681,
+        "pos": 1046
       },
       "val": {
-        "n": 750,
-        "pos": 294
+        "n": 671,
+        "pos": 262
       },
       "test": {
-        "n": 937,
-        "pos": 368
+        "n": 838,
+        "pos": 327
       }
     }
   ]

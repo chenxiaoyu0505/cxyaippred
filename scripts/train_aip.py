@@ -41,7 +41,7 @@ sys.path.insert(0, ROOT)
 
 from src.checkpoint import save_head                       # noqa: E402
 from src.config import RunCfg                              # noqa: E402
-from src.data_io import (apply_hand_scaler, fit_hand_scaler,  # noqa: E402
+from src.data_io import (apply_hand_scaler, esm_meta, fit_hand_scaler,  # noqa: E402
                          hand_feats, iter_batches, load_esm_cache,
                          load_folds, load_table, save_hand_scaler, seq_onehot)
 from src.ema_sat import EMASAT                             # noqa: E402
@@ -142,6 +142,15 @@ def main():
     ap.add_argument('--hand-norm', default='', choices=['', 'standard', 'none'],
                     help='手工特征标准化。默认 standard（每折只用训练行拟合 mean/std）；'
                          'none 为旧行为，694 维里基本只有 mw/charg 起作用')
+    ap.add_argument('--amphipath', action='store_true',
+                    help='手工块追加 10 维两亲性特征（疏水矩 μH，滑窗 7/11、转角 100°），'
+                         '总维度 694 → 704')
+    ap.add_argument('--esm-cache', default='', choices=['', 'auto', 'single', 'layers'],
+                    help='读哪份 ESM 缓存。建好分层缓存后 auto 会优先用它，'
+                         '复现 1 层历史基线请显式给 single')
+    ap.add_argument('--esm-fuse', default='', choices=['', 'weighted', 'mean', 'last'],
+                    help='多层 ESM 缓存的融合方式（默认 weighted：K 个 softmax 标量权重）。'
+                         '只在 cache_esm.py --layers 生成的缓存下起作用')
     ap.add_argument('--lnn', action='store_true',
                     help='启用 CfC(LNN) 序列支路：one-hot → 闭式 CfC → 池化 → concat')
     ap.add_argument('--lnn-dim', type=int, default=128, help='CfC 隐藏维度（默认 128）')
@@ -180,6 +189,10 @@ def main():
         cfg.model.norm = args.norm
     if args.hand_norm:
         cfg.model.hand_norm = args.hand_norm
+    if args.amphipath:
+        cfg.model.hand_extra = 'amphipath'
+    if args.esm_fuse:
+        cfg.model.esm_fuse = args.esm_fuse
     cfg.model.lnn = bool(args.lnn)
     cfg.model.lnn_dim = args.lnn_dim
     cfg.model.lnn_dt = args.lnn_dt
@@ -211,7 +224,12 @@ def main():
     cfg.data.split_sha256 = sha256_file(cfg.data.folds_csv)
     y = table['label'].values.astype(np.float32)
     folds = load_folds(cfg.data.folds_csv, cfg.fold, table)
-    hand = hand_feats(table, cfg.data.cache_dir)
+    hand = hand_feats(table, cfg.data.cache_dir,
+                      with_amphipath=(cfg.model.hand_extra == 'amphipath'))
+    # 维度由数据决定：694（基础）或 704（+两亲性），写进 cfg 与 checkpoint
+    cfg.model.hand_dim = int(hand.shape[1])
+    if cfg.model.hand_extra == 'amphipath' and cfg.model.hand_dim != 704:
+        raise SystemExit('--amphipath 要求 hand_dim=704，实际 %d' % cfg.model.hand_dim)
     if not cfg.model.use_hand:
         h_mean = h_std = None
         print('[%s] 手工特征支路已关闭（--lnn-only），不做标准化' % run_name)
@@ -226,7 +244,18 @@ def main():
         h_mean = h_std = None
         print('[%s] [warn] hand_norm=%s：手工特征未标准化，'
               '694 维里基本只有 mw/charg 两项在起作用' % (run_name, cfg.model.hand_norm))
-    emb, mask = load_esm_cache(cfg.data.cache_dir, table)
+    emb, mask = load_esm_cache(cfg.data.cache_dir, table,
+                               prefer=args.esm_cache or 'auto')
+    if emb.ndim == 4:
+        # 多层缓存：[N, K, L, D]。层号写进 cfg 与权重，推理时必须原样复现
+        meta_esm = esm_meta(cfg.data.cache_dir)
+        cfg.model.esm_layers = int(emb.shape[1])
+        cfg.model.esm_layer_ids = ','.join(str(x) for x in meta_esm.get('layers', []))
+        print('[%s] 多层 ESM：K=%d 层 [%s]，融合=%s'
+              % (run_name, cfg.model.esm_layers, cfg.model.esm_layer_ids or '?',
+                 cfg.model.esm_fuse))
+    elif emb.ndim != 3:
+        raise SystemExit('ESM 缓存维度异常：%s' % (emb.shape,))
 
     # ---- CfC 支路的输入：与 ESM 缓存逐行对齐的 one-hot ----
     seq = None
@@ -280,10 +309,13 @@ def main():
                    norm=cfg.model.norm,
                    lnn=cfg.model.lnn, lnn_dim=cfg.model.lnn_dim,
                    lnn_dt=cfg.model.lnn_dt,
-                   use_esm=cfg.model.use_esm, use_hand=cfg.model.use_hand).to(device)
-    print('[%s] 模型 %.2fM 参数 / %.1f MB（lnn=%s esm=%s hand=%s feat=%d）'
+                   use_esm=cfg.model.use_esm, use_hand=cfg.model.use_hand,
+                   esm_layers=cfg.model.esm_layers,
+                   esm_fuse=cfg.model.esm_fuse).to(device)
+    print('[%s] 模型 %.2fM 参数 / %.1f MB（lnn=%s esm=%s hand=%s feat=%d layers=%d/%s）'
           % (run_name, head.n_params() / 1e6, head.size_mb(), head.lnn,
-             head.use_esm, head.use_hand, head.feat_dim))
+             head.use_esm, head.use_hand, head.feat_dim,
+             head.esm_layers, head.esm_fuse))
     opt = torch.optim.Adam(head.parameters(), lr=cfg.train.lr,
                            weight_decay=cfg.train.weight_decay)
     sat = EMASAT(n, alpha_min=cfg.ema.alpha_min, decay=cfg.ema.decay,
@@ -380,6 +412,10 @@ def main():
         'threshold': thr['threshold'], 'val_aupr': best_aupr,
         'split_id': cfg.data.split_id,
         'hand_norm': cfg.model.hand_norm,
+        'hand_extra': cfg.model.hand_extra,
+        'esm_layers': cfg.model.esm_layers,
+        'esm_fuse': cfg.model.esm_fuse,
+        'esm_layer_ids': cfg.model.esm_layer_ids,
         'lnn': cfg.model.lnn, 'lnn_dim': cfg.model.lnn_dim,
         'use_esm': cfg.model.use_esm, 'use_hand': cfg.model.use_hand,
         'train_data': os.path.basename(cfg.data.folds_csv),

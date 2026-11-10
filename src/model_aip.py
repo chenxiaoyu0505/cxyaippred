@@ -194,7 +194,8 @@ class AIPHead(nn.Module):
     def __init__(self, embed_dim=1280, hand_dim=694, hidden=512,
                  n_res=2, cnn_drop=0.2, mlp_drop=0.3, norm='layer',
                  lnn=False, lnn_dim=128, lnn_dt=1.0,
-                 use_esm=True, use_hand=True):
+                 use_esm=True, use_hand=True,
+                 esm_layers=1, esm_fuse='weighted'):
         super().__init__()
         self.embed_dim = embed_dim
         self.hand_dim = hand_dim
@@ -207,6 +208,17 @@ class AIPHead(nn.Module):
         self.lnn_dim = int(lnn_dim)
         self.lnn_dt = float(lnn_dt)
         self.seq_dim = 20
+        # ---- 多层 ESM 融合 ----
+        # 输入可以是 [B, L, D]（单层）或 [B, K, L, D]（K 层，先融合再进卷积）。
+        # 'weighted' 只增加 K 个参数（softmax 权重），是最便宜的层选择方式。
+        self.esm_layers = int(esm_layers)
+        self.esm_fuse = str(esm_fuse)
+        if self.esm_layers > 1:
+            if self.esm_fuse not in ('weighted', 'mean', 'last'):
+                raise ValueError('esm_fuse 只支持 weighted/mean/last，收到 %r'
+                                 % (self.esm_fuse,))
+            if self.esm_fuse == 'weighted':
+                self.layer_w = nn.Parameter(torch.zeros(self.esm_layers))
         # 支路开关：--lnn-only 时关掉 ESM 与手工特征，只留 CfC（探针实验用）
         self.use_esm = bool(use_esm)
         self.use_hand = bool(use_hand)
@@ -232,15 +244,39 @@ class AIPHead(nn.Module):
             nn.Linear(hidden, hidden), nn.ReLU(), nn.Dropout(mlp_drop), nn.Linear(hidden, 1)
         )
 
+    def fuse_layers(self, hidden_states):
+        """[B, K, L, D] → [B, L, D]。
+
+        'weighted' 的权重是 softmax 出来的 K 个标量（初始化均匀 1/K）；
+        训练完把 `head.layer_w.softmax(0)` 打出来，就能说清"哪一层在起作用"。
+        """
+        if hidden_states.dim() == 3:
+            return hidden_states
+        if hidden_states.dim() != 4:
+            raise ValueError('hidden_states 应为 [B,L,D] 或 [B,K,L,D]，收到 %s'
+                             % (tuple(hidden_states.shape),))
+        if self.esm_layers <= 1:
+            raise ValueError('缓存给了 %d 层，但这个头是单层（esm_layers=1）；'
+                             '要么用 --esm-fuse 训练多层头，要么加 --esm-cache single'
+                             % hidden_states.shape[1])
+        if self.esm_fuse == 'last':
+            return hidden_states[:, -1]
+        if self.esm_fuse == 'mean':
+            return hidden_states.mean(dim=1)
+        w = torch.softmax(self.layer_w, dim=0).to(hidden_states.dtype)
+        return (hidden_states * w.view(1, -1, 1, 1)).sum(dim=1)
+
     def forward(self, hidden_states, attention_mask, hand_feats=None, seq=None,
                 return_decay=False):
         """
-        hidden_states : [B, L, D]  ESM-2 最后一层隐状态
+        hidden_states : [B, L, D] 或 [B, K, L, D]  ESM-2 隐状态
         attention_mask: [B, L]     1 = 有效残基
         hand_feats    : [B, hand_dim] 或 None（hand_dim > 0 时必需）
         seq           : [B, L, 20]   CfC 用的 one-hot（lnn=True 时必需）
         return_decay  : True 时额外返回 decay [B, L, lnn_dim]，供可解释性用
         """
+        if hidden_states is not None and hidden_states.dim() == 4:
+            hidden_states = self.fuse_layers(hidden_states)
         ref = hidden_states if hidden_states is not None else seq
         if attention_mask is None:
             if ref is None:

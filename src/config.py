@@ -48,6 +48,8 @@ class ModelCfg:
     norm: str = 'layer'
     # 手工特征标准化：'standard' = 每折只用训练行拟合 mean/std；'none' = 旧行为（不推荐）
     hand_norm: str = 'standard'
+    # 手工块追加项：'' = 只有 694 维；'amphipath' = 再拼 10 维两亲性特征（704 维）
+    hand_extra: str = ''
     # ---- CfC（LNN）序列支路 ----
     # 直接把 one-hot 序列喂进闭式 CfC，池化后与 ESM/手工特征 concat。
     # 不加 router：静态权重会被下一层 Linear 吸收，等于没加。
@@ -57,6 +59,14 @@ class ModelCfg:
     # 支路开关：--lnn-only 关掉 ESM 与手工特征，只留 CfC（探针实验用）
     use_esm: bool = True
     use_hand: bool = True
+    # ---- 多层 ESM 融合 ----
+    # 缓存里存 K 层时（cache_esm.py --layers 24,30,33），这里决定怎么合成一层：
+    #   'weighted' = softmax 出来的 K 个标量权重（只多 K 个参数，推荐）
+    #   'mean'     = 等权平均；'last' = 只用最后一层（等价单层）
+    esm_fuse: str = 'weighted'
+    esm_layers: int = 1
+    # 缓存里实际存了哪几层，由 train 脚本从 esm_meta.json 填进来，写进权重供推理复现
+    esm_layer_ids: str = ''
 
 
 @dataclass
@@ -161,11 +171,12 @@ class RunCfg:
         """给人看的开关摘要，写进日志首行"""
         return ('fold=%d seed=%d ema=%s alpha_min=%.2f start=%d tau=%.2f '
                 'pos_weight=%.2f epochs=%d bs=%d lr=%g norm=%s hand_norm=%s '
-                'lnn=%s lnn_dim=%d lnn_dt=%.2f use_esm=%s use_hand=%s'
+                'hand_extra=%s lnn=%s lnn_dim=%d lnn_dt=%.2f use_esm=%s use_hand=%s'
                 % (self.fold, self.train.seed,
                    self.ema.enabled, self.ema.alpha_min,
                    self.ema.start_epoch, self.ema.tau, self.train.pos_weight,
                    self.train.epochs, self.train.batch_size, self.train.lr,
                    self.model.norm, self.model.hand_norm,
+                   self.model.hand_extra or '-',
                    self.model.lnn, self.model.lnn_dim, self.model.lnn_dt,
                    self.model.use_esm, self.model.use_hand))

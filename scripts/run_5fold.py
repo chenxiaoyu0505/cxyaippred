@@ -156,6 +156,12 @@ def main():
     ap.add_argument('--lnn-dt', type=float, default=1.0, help='CfC 的 Δt（默认 1.0）')
     ap.add_argument('--hand-norm', default='', choices=['', 'standard', 'none'],
                     help='手工特征标准化（默认 standard；none 为旧行为/消融）')
+    ap.add_argument('--amphipath', action='store_true',
+                    help='手工块追加 10 维两亲性特征（疏水矩 μH），694 → 704 维')
+    ap.add_argument('--esm-cache', default='', choices=['', 'auto', 'single', 'layers'],
+                    help='读哪份 ESM 缓存（auto=有分层就用分层；复现 1 层基线用 single）')
+    ap.add_argument('--esm-fuse', default='', choices=['', 'weighted', 'mean', 'last'],
+                    help='多层 ESM 缓存的融合方式（默认 weighted）')
     ap.add_argument('--device', default='')
     ap.add_argument('--cache-dir', default='', help='ESM 缓存目录，默认 <root>/cache；'
                                                    '调试时可指向 _work\\fakecache')
@@ -263,6 +269,12 @@ def main():
                 cmd += ['--norm', args.norm]
             if args.hand_norm:
                 cmd += ['--hand-norm', args.hand_norm]
+            if args.amphipath:
+                cmd += ['--amphipath']
+            if args.esm_fuse:
+                cmd += ['--esm-fuse', args.esm_fuse]
+            if args.esm_cache:
+                cmd += ['--esm-cache', args.esm_cache]
             if args.lnn:
                 cmd += ['--lnn', '--lnn-dim', str(args.lnn_dim),
                         '--lnn-dt', str(args.lnn_dt)]

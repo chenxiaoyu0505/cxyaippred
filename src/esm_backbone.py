@@ -81,3 +81,29 @@ class ESMBackbone:
         h = out.hidden_states[self.layer]
         mask = residue_mask(enc, self.tok)
         return h.float().cpu().numpy(), mask.cpu().numpy().astype(np.uint8)
+
+    @torch.no_grad()
+    def encode_layers(self, seqs, layers):
+        """取多层隐状态：layers=[24,30,33] → h [B, K, L, D]（K=len(layers)）。
+
+        为什么要多层：只用最后一层是"默认"，不是"最优"。不同任务的最佳层不同，
+        而层选择本身是零成本的超参（见 model_aip.AIPHead.fuse_layers）。
+        层号允许负数（-1 = 最后一层），与 hidden_states 的索引一致。
+        """
+        enc = self.tok(list(seqs), return_tensors='pt', padding=True,
+                       truncation=True, max_length=self.max_len)
+        enc = {k: v.to(self.device) for k, v in enc.items()}
+        out = self.model(**enc, output_hidden_states=True)
+        hs = out.hidden_states
+        n = len(hs)
+        picked = []
+        for L in layers:
+            i = int(L)
+            if i < 0:
+                i += n
+            if not (0 <= i < n):
+                raise ValueError('层号 %d 超出范围（共 %d 层）' % (L, n))
+            picked.append(hs[i])
+        h = torch.stack(picked, dim=1)                 # [B, K, L, D]
+        mask = residue_mask(enc, self.tok)
+        return h.float().cpu().numpy(), mask.cpu().numpy().astype(np.uint8)

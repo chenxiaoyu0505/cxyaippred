@@ -14,6 +14,11 @@
 |---|---|---|---|---|---|---|
 | 1 | 2026-11-09 17:38 | `cv5` | 默认参数（无 EMA、无 MCC、无噪声、seed 0） | **完成** | `experiments/cv5/` | AUROC 0.7277±0.0130 / AUPR 0.6494±0.0103；单折主表 |
 | 2 | 2026-11-09 18:43 | `cv5_full` | `--ema --mcc-adaptive`（历史，MCC 已移除） | **完成** | `experiments/cv5_full/` | AUROC 0.7316±0.0060 / AUPR 0.6525±0.0049；但 MCC@0.5 降至 0.2505，校准变差 |
+| 3 | 2026-11-10 10:51 | `cv5_fixed` | `--norm layer`（三处 bug 全修，mac/MPS） | **完成** | `experiments/cv5_fixed/` | AUPR 0.6063±0.0211 / AUROC 0.7011±0.0151；比 cv5 低 0.043，掉的是长度捷径 |
+| 4 | 2026-11-10 12:0x | `cv5_fixed_ema` | `cv5_fixed` + `--ema` | **完成** | `experiments/cv5_fixed_ema/` | AUPR 0.6102±0.0187 / AUROC 0.7039±0.0120；净增益 +0.0039 在噪声内，主要作用是降方差 |
+| 5 | 2026-11-10 16:09 | `cv5_peptidebn` | `--norm peptide_bn --keep-cache` | **完成** | `experiments/cv5_peptidebn/` | AUPR 0.6027±0.0115 / AUROC 0.6949±0.0093；**sd 减半，定为新基线** |
+| 6 | 2026-11-10 17:0x | `cv5_peptidebn_ema` | `--norm peptide_bn --ema --keep-cache` | **完成** | `experiments/cv5_peptidebn_ema/` | AUPR 0.5998±0.0145 / AUROC 0.6955±0.0114；EMA 这条线上无增益 |
+| 7 | 2026-11-10 18:5x | `probe_cfc` | `--lnn-only --keep-cache`（只训 CfC 支路） | **完成** | `experiments/probe_cfc/` | AUPR 0.4867±0.0286 / AUROC 0.5880±0.0263；**不如只用肽长**（0.5074/0.6090），CfC 否决 |
 
 状态取值：`运行中` / `完成` / `失败` / `中止`。
 
@@ -134,6 +139,44 @@
 
 ---
 
+### #5 `cv5_peptidebn` —— masked BN + 按肽等权（新基线）
+
+- **启动时间**：2026-11-10 16:09（macOS / MPS，`--keep-cache`）
+- **命令**：`python scripts/run_5fold.py --exp cv5_peptidebn --norm peptide_bn --keep-cache`
+- **实际参数**：`--norm peptide_bn`；其余同 `cv5`（epochs 50 / batch 16 / lr 1e-4 / patience 10 / 无 EMA）
+- **状态**：完成
+- **关键数字**：折均 AUPR **0.6027±0.0115** / AUROC **0.6949±0.0093**；
+  OOF（池化口径）AUPR 0.5788 / AUROC 0.6857；逐折 test AUPR 0.6169/0.6038/0.6096/0.5875/0.5958
+- **与 `cv5_fixed` 比较**：OOF paired bootstrap ΔAUPR −0.0050，95% CI [−0.0221, +0.0115]（跨 0），
+  均值无显著差异；但 **sd 减半**（AUPR 0.0211→0.0115，AUROC 0.0151→0.0093）
+- **结论**：作为新基线。sd 减半是真实收益（选择噪声只会同时抬高两者）。跨折阈值仍很差
+  （0.298/0.810/0.496/0.374/0.401），原始池化 OOF AUPR 0.5788，按折秩归一化后 0.6013（+0.023）
+  ⇒ 部署前必须做 Platt/isotonic 校准
+- **异常**：无
+
+### #6 `cv5_peptidebn_ema` —— 新基线 + EMA
+
+- **命令**：`python scripts/run_5fold.py --exp cv5_peptidebn_ema --norm peptide_bn --ema --keep-cache`
+- **实际参数**：`--ema-alpha-min 0.7 --ema-start-epoch 2 --ema-tau 1.0 --ema-decay 0.65`（默认值）
+- **状态**：完成
+- **关键数字**：折均 AUPR 0.5998±0.0145 / AUROC 0.6955±0.0114；OOF 0.5875 / 0.6936
+- **结论**：EMA 在 masked BN 这条线上没有增益（均值 −0.0029 AUPR），与 D-10b 的结论一致——
+  EMA 只是降方差，而 masked BN 已经把 sd 降下来了，两者作用重叠
+
+### #7 `probe_cfc` —— CfC 支路生死判据（负结果）
+
+- **命令**：`python scripts/run_5fold.py --exp probe_cfc --lnn-only --keep-cache`
+- **实际参数**：只训 CfC 支路，`use_esm=False use_hand=False`，hidden 128，0.39M 参数
+- **状态**：完成
+- **关键数字**：折均 AUPR **0.4867±0.0286** / AUROC **0.5880±0.0263**；OOF 0.4834 / 0.5873；
+  逐折 OOF AUPR 0.4923/0.4555/0.4667/0.4890/0.5297
+- **对照**：只用肽长当分数 → OOF AUPR **0.5074** / AUROC **0.6090**；随机 0.3927
+- **结论**：**CfC 不如一个单特征基线，否决**（见 DECISIONS.md D-11）。
+  best_epoch 10–25 且末轮 val 低于峰值 ⇒ 过拟合而非欠训。
+  与基线的秩相关 0.372，任何非零融合权重都不超过基线
+
+---
+
 ## 3. 待跑清单（跑完一个划一个）
 
 | 顺序 | exp | 命令 | 为什么 |
@@ -141,10 +184,13 @@
 | — | `cv5_ema` / `cv5_mcc` / `cv5_full` | 历史实验 | 已完成；`cv5_ema` 用的是未修正的 EMA，`cv5_mcc`/`cv5_full` 含已移除的 MCC，均只能当历史对照 |
 | 2 | `cv5_ema_fix` | 旧接口固定 α=0.7（历史） | 已完成：AUROC 0.7294 / AUPR 0.6515，排序无显著增益 |
 | 2b | `cv5_ema_ramp` | 旧 `exp` 近似，已完成 | AUROC 0.7293 / AUPR 0.6516，与固定 α=0.7 相同；不改善排序 |
-| 2c | `cv5_ema_halving` | `--ema --ema-alpha-min 0.7 --ema-start-epoch 2 --ema-tau 1.0 --ema-decay 0.65` | 精确 `2^-s` 调度（α=0.850/0.775/0.7375…）；待用户执行 |
-| 3 | `noise10` / `noise10_ema` | `--label-noise 0.10`（±`--ema`） | EMA 是否真的抗噪（判定规则见 DECISIONS.md） |
-| 4 | `legacy` | `run_legacy.py --exp legacy` | 与外部基线的公平对照线（4,224/462） |
-| 5 | `cv5_cluster` | 换聚类划分 | 回应 R1-4 的序列相似性泄漏（尚未实现） |
+| 2c | `cv5_ema_halving` | `--ema --ema-alpha-min 0.7 --ema-start-epoch 2 --ema-tau 1.0 --ema-decay 0.65` | 精确 `2^-s` 调度；已被 `cv5_peptidebn_ema` 覆盖，优先级降低 |
+| 3 | `cv5_fix_nohand` | `--norm peptide_bn --hand-norm none --keep-cache` | **长度捷径的阳性对照**：不标准化手工特征，预期全局回升但固定长度子集不涨 ⇒ 证明回升来自捷径 |
+| 3b | `cv5_nohand` | `--no-hand`（需先加 CLI flag） | 隔离 ESM 通道：若全局 AUROC 仍比固定长度子集高 ~0.08，说明 ESM 也在泄漏长度 |
+| 4 | `noise10` / `noise10_ema` | `--label-noise 0.10`（±`--ema`） | EMA 是否真的抗噪（判定规则见 DECISIONS.md） |
+| 5 | `legacy` | `run_legacy.py --exp legacy` | 与外部基线的公平对照线（4,224/462） |
+| 6 | `cv5_cluster` | 换聚类划分 | 回应 R1-4 的序列相似性泄漏（尚未实现） |
+| — | `ab_lnn` | 已取消 | CfC 探针否决，见 DECISIONS.md D-11 |
 
 ---
 
@@ -162,3 +208,27 @@
 - **结论**：这一跑支持/否定了什么
 - **异常**：若有，写清楚现象与排查到哪一步
 ```
+
+## 4. 4,190 口径的跑批计划（2026-11-10 起，替代上面第 3 节的旧清单）
+
+数据集已切换为 4,190 条（DECISIONS.md D-15），**上面第 3 节的待跑项全部作废**，除标注"历史"的以外不得再跑。
+
+| 顺序 | exp | 命令 | 为什么 |
+|---|---|---|---|
+| 1 | `cv5_clean` | `run_5fold.py --exp cv5_clean --note "4190 清洗版基线" --norm peptide_bn --keep-cache` | 新口径的**唯一参照线**，之后所有 Δ 都相对它 |
+| 2 | `cv5_clean_amph` | 同上 + `--amphipath`（exp 改 `cv5_clean_amph`） | μH 10 维在干净数据上是否还有增益（4,686 上是 +0.010 AUROC / −0.003 AUPR，不可靠） |
+| 3 | `cv5_clean_layers` | 同上 + `--esm-fuse weighted` | 三层 ESM 24/30/33（缓存已就绪，869 MB） |
+| 4 | `cv5_clean_ema` | 同上 + `--ema` | EMA 是否仍主要降方差 |
+| 5 | `cv5_clean_nohand` | `--no-hand`（需先加 CLI flag） | ESM 单通道的边际价值 |
+| 6 | `fsel_leak` | 复现对方的 top-300 特征选择流程 | 验证 0.84 vs 0.68 的 0.15 差距是否来自选择泄漏 |
+
+**统一报数口径**（D-12 / D-15）：
+
+```bash
+# 全集 + 与 HD-AIP 可比的 4,190 子集 + 换用对方标签
+python scripts/eval_subset.py --exp cv5_clean --overlap data/HD-AIP_benchmark_4194.csv
+python scripts/eval_subset.py --exp cv5_clean --overlap data/HD-AIP_benchmark_4194.csv --labels from-subset
+```
+
+**注意**：`--keep-cache` 必带（否则每折删 1.1 GB 缓存重算）；复现单层实验时若缓存 meta 是 `layers_v1`，
+必须加 `--esm-cache single`。

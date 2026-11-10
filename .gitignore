@@ -30,3 +30,6 @@ experiments/*/results/
 !heads/README.md
 !models/README.md
 !runs/README.md
+
+# ---- 本地数据存档（旧版本快照，不入库）----
+data/archive/
