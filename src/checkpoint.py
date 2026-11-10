@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-权重文件格式（v2）
+权重文件格式（v3）
 
 一个 fold 一个文件，只装 AIPHead（约 85 MB），不含 ESM-2：
 
@@ -37,15 +37,21 @@ import torch
 
 from .model_aip import AIPHead
 
-FORMAT = 'cxyaippred-aip-head-v2'
+FORMAT = 'cxyaippred-aip-head-v3'
 
-# v1 → v2 的唯一区别是残差块的归一化：BatchNorm1d（把 padding 算进统计量，
-# 预测随 batch 补零长度变化）→ 逐位置 LayerNorm（norm='layer'）。
-# v1 权重能加载进 norm='batch' 的新结构，但那样等于把 bug 一起带回来，
-# 所以直接拒绝，要求用修好的代码重训。
+# v3 相对 v2 只多了一个**可选**的 CfC（LNN）序列支路：lnn=False 的 v3 权重与
+# v2 结构完全相同，所以 v2 可以直接读，缺的键按默认值补。
+# v1 权重能加载进 norm='batch' 的结构，但那样等于把 padding 那个 bug 一起带
+# 回来，所以直接拒绝，要求用修好的代码重训。
+COMPAT_FORMATS = ('cxyaippred-aip-head-v2',)
 LEGACY_FORMATS = ('cxyaippred-aip-head-v1',)
 
-ARCH_KEYS = ('embed_dim', 'hand_dim', 'hidden', 'n_res', 'cnn_drop', 'mlp_drop', 'norm')
+ARCH_KEYS = ('embed_dim', 'hand_dim', 'hidden', 'n_res', 'cnn_drop', 'mlp_drop',
+             'norm', 'lnn', 'lnn_dim', 'use_esm', 'use_hand',
+             'esm_layers', 'esm_fuse')
+ARCH_DEFAULTS = {'norm': 'layer', 'lnn': False, 'lnn_dim': 128,
+                 'use_esm': True, 'use_hand': True,
+                 'esm_layers': 1, 'esm_fuse': 'weighted'}
 
 
 def save_head(head, path, meta):
@@ -62,7 +68,7 @@ def save_head(head, path, meta):
 def load_head(path, map_location='cpu'):
     ckpt = torch.load(path, map_location=map_location, weights_only=False)
     fmt = ckpt.get('format')
-    if fmt != FORMAT:
+    if fmt != FORMAT and fmt not in COMPAT_FORMATS:
         if fmt in LEGACY_FORMATS:
             raise SystemExit(
                 '%s 是旧格式 %s：残差块用 BatchNorm1d 且卷积不吃掩码，\n'
@@ -70,8 +76,12 @@ def load_head(path, map_location='cpu'):
                 '这类权重不可用，请用当前代码重训（--exp 换一个新名字）。' % (path, fmt))
         raise ValueError('%s 不是 %s 格式（format=%r）' % (path, FORMAT, fmt))
     meta = ckpt['meta']
-    head = AIPHead(**{k: meta[k] for k in ARCH_KEYS})
-    head.load_state_dict(ckpt['state'])
+    kwargs = {k: meta.get(k, ARCH_DEFAULTS.get(k)) for k in ARCH_KEYS}
+    head = AIPHead(**kwargs)
+    missing, unexpected = head.load_state_dict(ckpt['state'], strict=False)
+    if missing or unexpected:
+        raise ValueError('%s 的权重与结构不符：missing=%s unexpected=%s'
+                         % (path, list(missing), list(unexpected)))
     return head, meta
 
 

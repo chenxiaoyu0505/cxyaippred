@@ -34,6 +34,7 @@
     所以默认不写，需要发布结果时再： python scripts/register_exp.py --exp <名字>
 """
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -133,6 +134,8 @@ def main():
     ap.add_argument('--resume', action='store_true',
                     help='实验目录已存在时继续（跳过已完成的 run）')
     ap.add_argument('--split-id', default='split_seed42_n5')
+    ap.add_argument('--data', default='',
+                    help='默认从 split manifest 的 data.file 读取；没有 manifest 时用 data/aip_all.csv')
     ap.add_argument('--folds', default='0,1,2,3,4')
     ap.add_argument('--seeds', default='0', help='逗号分隔，例如 0,1,2')
     ap.add_argument('--epochs', type=int, default=50)
@@ -149,10 +152,28 @@ def main():
     ap.add_argument('--ema-tau', type=float, default=1.0,
                     help='α 半衰期（epoch）；1.0 即每轮减半')
     ap.add_argument('--norm', default='', choices=['', 'layer', 'peptide_bn', 'masked_batch', 'batch'],
-                    help='残差块归一化（默认 layer；peptide_bn = masked BN + 按肽等权；'
-                         'masked_batch = masked BN 按残基等权；batch = 原生 BN，仅消融）')
+                    help='残差块归一化（默认 peptide_bn = masked BN + 按肽等权；'
+                         'layer = 逐位置 LayerNorm；masked_batch = masked BN 按残基等权；'
+                         'batch = 原生 BN，仅消融）')
+    ap.add_argument('--lnn', action='store_true', help='启用 CfC(LNN) 序列支路')
+    ap.add_argument('--lnn-dim', type=int, default=128, help='CfC 隐藏维度（默认 128）')
+    ap.add_argument('--lnn-dt', type=float, default=1.0, help='CfC 的 Δt（默认 1.0）')
     ap.add_argument('--hand-norm', default='', choices=['', 'standard', 'none'],
                     help='手工特征标准化（默认 standard；none 为旧行为/消融）')
+    ap.add_argument('--amphipath', action='store_true',
+                    help='手工块追加 10 维两亲性特征（疏水矩 μH）。**这是默认行为**')
+    ap.add_argument('--no-amphipath', action='store_true',
+                    help='关掉两亲性特征，退回 694 维（消融用）')
+    ap.add_argument('--esm-cache', default='single', choices=['', 'auto', 'single', 'layers'],
+                    help='读哪份 ESM 缓存。**默认 single**（基线是单层）；'
+                         '跑多层实验要显式给 layers 或 auto，否则会静默退化成单层')
+    ap.add_argument('--esm-fuse', default='', choices=['', 'weighted', 'mean', 'last'],
+                    help='多层 ESM 缓存的融合方式（默认 weighted）')
+    ap.add_argument('--esm-name', default='',
+                    help='建缓存时用哪个 ESM-2（默认 facebook/esm2_t33_650M_UR50D）。'
+                         '换大模型请配独立 --cache-dir，别覆盖现有缓存')
+    ap.add_argument('--esm-dtype', default='', choices=['', 'fp32', 'fp16', 'bf16'],
+                    help='建缓存时加载权重的精度；3B 必须 fp16（fp32 要 12 GB）')
     ap.add_argument('--device', default='')
     ap.add_argument('--cache-dir', default='', help='ESM 缓存目录，默认 <root>/cache；'
                                                    '调试时可指向 _work\\fakecache')
@@ -164,6 +185,8 @@ def main():
     ap.add_argument('--register', action='store_true',
                     help='跑完把本实验登记到 experiments/_index.csv（该总表被 git 跟踪，'
                          '默认不登记以免弄脏工作区；事后可用 scripts/register_exp.py 补登记）')
+    ap.add_argument('--lnn-only', action='store_true',
+                    help='探针：只训练 CfC 一条支路（关掉 ESM 与手工特征）')
     args = ap.parse_args()
 
     # ---- 实验名校验与重复保护 ----
@@ -191,8 +214,19 @@ def main():
     exp_dir = os.path.join(ROOT, 'experiments', args.exp)
     runs_dir = os.path.join(exp_dir, 'runs')
     split_id = args.split_id
-    split_csv = os.path.join(ROOT, 'data', 'splits', split_id, 'folds.csv')
-    data_csv = os.path.join(ROOT, 'data', 'aip_all.csv')
+    split_dir = os.path.join(ROOT, 'data', 'splits', split_id)
+    split_csv = os.path.join(split_dir, 'folds.csv')
+
+    if args.data:
+        data_csv = args.data if os.path.isabs(args.data) else os.path.join(ROOT, args.data)
+    else:
+        data_csv = os.path.join(ROOT, 'data', 'aip_all.csv')
+        manifest_path = os.path.join(split_dir, 'manifest.json')
+        if os.path.exists(manifest_path):
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                rel = json.load(f).get('data', {}).get('file')
+            if rel:
+                data_csv = rel if os.path.isabs(rel) else os.path.join(ROOT, rel)
 
     print('=' * 70)
     print('实验 %s | 折 %s | model seed %s | 共 %d 次训练'
@@ -211,10 +245,19 @@ def main():
 
     # ---- 1. 划分 ----
     if not os.path.exists(split_csv):
-        run([PY, os.path.join(HERE, 'make_5fold.py'), '--split-id', split_id],
+        if split_id.startswith(('split_holdout', 'split_origtest')):
+            raise SystemExit(
+                '划分 %s 不存在。该口径需先用 make_holdout_cv.py 生成：\n'
+                '  %s scripts\\make_holdout_cv.py --data data\\aip_train_nobip.csv '
+                '--test-data data\\aip_test_nobip.csv --split-id %s '
+                '--seed 42 --folds 5'
+                % (split_id, PY, split_id))
+        run([PY, os.path.join(HERE, 'make_5fold.py'), '--split-id', split_id,
+             '--data', data_csv],
             '生成划分 %s' % split_id)
     else:
         print('\n[1/5] 划分已存在：%s' % os.path.relpath(split_csv, ROOT))
+    print('数据：%s' % os.path.relpath(data_csv, ROOT))
 
     # ---- 2. 缓存 ----
     from src.cache_util import clean_cache, has_cache   # noqa: E402
@@ -224,6 +267,10 @@ def main():
     need_build = args.rebuild_cache or not has_cache(cache_dir)
     if need_build:
         cmd = [PY, os.path.join(HERE, 'cache_esm.py'), '--cache-dir', cache_dir]
+        if args.esm_name:
+            cmd += ['--esm-name', args.esm_name]
+        if args.esm_dtype:
+            cmd += ['--dtype', args.esm_dtype]
         if args.rebuild_cache:
             cmd.append('--force')
         run(cmd, '生成 ESM 缓存（约 0.9 GB，5–10 分钟）')
@@ -243,6 +290,7 @@ def main():
             cmd = [PY, os.path.join(HERE, 'train_aip.py'),
                    '--fold', str(k), '--seed', str(seed),
                    '--exp', args.exp, '--split-id', split_id,
+                   '--data', data_csv,
                    '--epochs', str(args.epochs), '--batch-size', str(args.batch_size),
                    '--lr', str(args.lr), '--patience', str(args.patience),
                    '--pos-weight', str(args.pos_weight),
@@ -258,6 +306,19 @@ def main():
                 cmd += ['--norm', args.norm]
             if args.hand_norm:
                 cmd += ['--hand-norm', args.hand_norm]
+            if args.amphipath:
+                cmd += ['--amphipath']
+            if args.no_amphipath:
+                cmd += ['--no-amphipath']
+            if args.esm_fuse:
+                cmd += ['--esm-fuse', args.esm_fuse]
+            if args.esm_cache:
+                cmd += ['--esm-cache', args.esm_cache]
+            if args.lnn:
+                cmd += ['--lnn', '--lnn-dim', str(args.lnn_dim),
+                        '--lnn-dt', str(args.lnn_dt)]
+            if args.lnn_only:
+                cmd += ['--lnn-only']
             if args.device:
                 cmd += ['--device', args.device]
             run(cmd, '训练 fold%d / seed%d' % (k, seed))

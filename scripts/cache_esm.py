@@ -46,7 +46,15 @@ def main():
     ap.add_argument('--cache-dir', default=os.path.join(ROOT, 'cache'))
     ap.add_argument('--esm-name', default='facebook/esm2_t33_650M_UR50D')
     ap.add_argument('--layer', type=int, default=-1)
+    ap.add_argument('--layers', default='',
+                    help='逗号分隔的多层，例如 24,30,33。给出时另写 '
+                         'esm_emb_layers_fp16.npy（[N,K,L,D]，只读 memmap），'
+                         '单层缓存不受影响')
     ap.add_argument('--batch-size', type=int, default=16)
+    ap.add_argument('--dtype', default='fp32', choices=['fp32', 'fp16', 'bf16'],
+                    help='加载权重的精度。3B 模型必须用 fp16（fp32 要 12 GB）；'
+                         '缓存本身始终存 fp16')
+
     ap.add_argument('--device', default='auto',
                     help='auto/cuda/mps/cpu，默认自动选择')
     ap.add_argument('--force', action='store_true')
@@ -64,7 +72,12 @@ def main():
         return
 
     os.makedirs(args.cache_dir, exist_ok=True)
-    p_emb = os.path.join(args.cache_dir, 'esm_emb_fp16.npy')
+    layer_ids = [int(x) for x in args.layers.replace(' ', '').split(',') if x != '']
+    multi = len(layer_ids) > 1
+    if args.layers and not multi:
+        raise SystemExit('--layers 至少给两层（单层请用 --layer）')
+    p_emb = os.path.join(args.cache_dir,
+                         'esm_emb_layers_fp16.npy' if multi else 'esm_emb_fp16.npy')
     p_mask = os.path.join(args.cache_dir, 'esm_mask.npy')
     if os.path.exists(p_emb) and not args.force:
         print('已存在 %s（%.1f MB），加 --force 才重算' % (p_emb, os.path.getsize(p_emb) / 1e6))
@@ -80,24 +93,41 @@ def main():
     lmax = max(len(s) for s in seqs) + 2
     lmax = min(lmax, 1024)
 
-    bb = ESMBackbone(args.esm_name, device=args.device, layer=args.layer)
+    bb = ESMBackbone(args.esm_name, device=args.device, layer=args.layer,
+                     dtype=args.dtype)
     dim = bb.dim
-    print('ESM %s | dim=%d | layer=%d | Lmax=%d | device=%s'
-          % (args.esm_name, dim, args.layer, lmax, bb.device))
+    k = len(layer_ids) if multi else 1
+    print('ESM %s | dim=%d | %s | Lmax=%d | device=%s | dtype=%s'
+          % (args.esm_name, dim,
+             'layers=%s' % layer_ids if multi else 'layer=%d' % args.layer,
+             lmax, bb.device, args.dtype))
 
-    emb = np.lib.format.open_memmap(p_emb, mode='w+', dtype=np.float16, shape=(n, lmax, dim))
+    if multi:
+        emb = np.lib.format.open_memmap(p_emb, mode='w+', dtype=np.float16,
+                                        shape=(n, k, lmax, dim))
+    else:
+        emb = np.lib.format.open_memmap(p_emb, mode='w+', dtype=np.float16,
+                                        shape=(n, lmax, dim))
     msk = np.lib.format.open_memmap(p_mask, mode='w+', dtype=np.uint8, shape=(n, lmax))
 
     t0 = time.time()
     with torch.no_grad():
         for start in range(0, n, args.batch_size):
             chunk = seqs[start:start + args.batch_size]
-            h, m = bb.encode(chunk)                     # [b, L, D], [b, L]
-            b, L, _ = h.shape
+            if multi:
+                h, m = bb.encode_layers(chunk, layer_ids)   # [b, K, L, D]
+                b, _, L, _ = h.shape
+            else:
+                h, m = bb.encode(chunk)                     # [b, L, D]
+                b, L, _ = h.shape
             if L > lmax:
                 raise SystemExit('实测长度 %d > 预算 %d' % (L, lmax))
-            emb[start:start + b, :L, :] = h.astype(np.float16)
-            emb[start:start + b, L:, :] = 0
+            if multi:
+                emb[start:start + b, :, :L, :] = h.astype(np.float16)
+                emb[start:start + b, :, L:, :] = 0
+            else:
+                emb[start:start + b, :L, :] = h.astype(np.float16)
+                emb[start:start + b, L:, :] = 0
             msk[start:start + b, :L] = m
             msk[start:start + b, L:] = 0
             done = min(start + args.batch_size, n)
@@ -120,6 +150,8 @@ def main():
             # mask 语义版本：residues_only_v1 = 1 只标记真实氨基酸残基，
             # <cls>/<eos>/<pad> 均为 0。旧缓存没有这个字段，读取时会被拒绝重建。
             'mask': 'residues_only_v1',
+            'layout': 'layers_v1' if multi else 'single_v1',
+            'layers': layer_ids if multi else [args.layer],
             'seconds': round(time.time() - t0, 1),
             'data_csv': os.path.relpath(args.data, ROOT),
         }, f, indent=2, ensure_ascii=False)

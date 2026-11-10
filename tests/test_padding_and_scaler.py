@@ -145,4 +145,4 @@ def test_checkpoint_roundtrip_and_v1_rejected(tmp_path):
     torch.save(ck, p1)
     with pytest.raises(SystemExit):
         load_head(p1)
-    assert FORMAT.endswith('v2')
+    assert FORMAT.endswith('v3')   # v3 = v2 + 可选 CfC 支路

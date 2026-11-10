@@ -135,23 +135,41 @@ def check_folds_complete(folds_csv, table):
 
 # ---------------------------------------------------------------- 特征缓存
 
-def hand_feats(table, cache_dir='cache'):
+def hand_feats(table, cache_dir='cache', with_amphipath=False):
     """
-    694 维手工特征。第一次算完存盘，之后直接读，避免每次训练重算（也避免版本漂移）。
-    """
-    from .features import compute_handcraft, handcraft_feature_names
+    694 维手工特征（`with_amphipath=True` 时再追加 10 维两亲性特征 = 704 维）。
 
-    path = os.path.join(cache_dir, 'hand_feats.npy')
+    第一次算完存盘，之后直接读，避免每次训练重算（也避免版本漂移）。
+    两亲性特征单独存一个文件，这样加不加 `--amphipath` 的两份缓存互不覆盖。
+    """
+    from .features import (AMPHIPATH_DIM, amphipath_feature_names,
+                           compute_amphipath, compute_handcraft,
+                           handcraft_feature_names)
+
+    fname = 'hand_feats_amphipath.npy' if with_amphipath else 'hand_feats.npy'
+    path = os.path.join(cache_dir, fname)
     seqs = table['sequence'].tolist()
+    dim = len(handcraft_feature_names()) + (AMPHIPATH_DIM if with_amphipath else 0)
+    if with_amphipath:
+        names = handcraft_feature_names() + amphipath_feature_names()
+        if len(names) != dim:
+            raise AssertionError('特征名 %d ≠ 维度 %d' % (len(names), dim))
     if os.path.exists(path):
         arr = np.load(path)
-        if arr.shape == (len(seqs), len(handcraft_feature_names())):
+        if arr.shape == (len(seqs), dim):
             return arr.astype(np.float32)
         print('[warn] %s 形状不符（%s），重算' % (path, arr.shape))
 
-    arr = np.stack([compute_handcraft(s) for s in seqs], axis=0).astype(np.float32)
-    if arr.shape[1] != 694:
-        raise SystemExit('手工特征维度 %d ≠ 694' % arr.shape[1])
+    base = np.stack([compute_handcraft(s) for s in seqs], axis=0).astype(np.float32)
+    if base.shape[1] != 694:
+        raise SystemExit('手工特征维度 %d ≠ 694' % base.shape[1])
+    if with_amphipath:
+        extra = np.stack([compute_amphipath(s) for s in seqs], axis=0).astype(np.float32)
+        arr = np.concatenate([base, extra], axis=1)
+    else:
+        arr = base
+    if arr.shape[1] != dim:
+        raise SystemExit('手工特征维度 %d ≠ %d' % (arr.shape[1], dim))
     if np.isnan(arr).any():
         raise SystemExit('手工特征出现 NaN')
     os.makedirs(cache_dir, exist_ok=True)
@@ -198,12 +216,36 @@ def load_hand_scaler(path):
     return z['mean'], z['std']
 
 
-def load_esm_cache(cache_dir, table):
+def esm_meta(cache_dir):
+    """读 esm_meta.json；没有就返回 {}（旧缓存可能没有这个文件）。"""
+    p = os.path.join(cache_dir, 'esm_meta.json')
+    if not os.path.exists(p):
+        return {}
+    with open(p, encoding='utf-8') as f:
+        return json.load(f)
+
+
+def load_esm_cache(cache_dir, table, prefer='auto'):
     """
-    返回 (emb [N,L,D] fp16, mask [N,L] uint8)。
-    用 memmap 打开，不占内存；并用 esm_index.csv 校验行序未变。
+    返回 (emb, mask)。
+    emb 是 memmap：单层缓存为 [N, L, D]，多层缓存为 [N, K, L, D]；
+    mask 恒为 [N, L] uint8。用 esm_index.csv 校验行序未变。
+
+    prefer: 'auto'   —— 有分层缓存就用它（默认，跑多层实验省事）
+            'single' —— 强制读 esm_emb_fp16.npy（复现历史基线时必须显式指定，
+                        否则分层缓存一建好，所有 1 层实验都会悄悄变成 3 层）
+            'layers' —— 强制读分层缓存，没有就报错
     """
-    p_emb = os.path.join(cache_dir, 'esm_emb_fp16.npy')
+    p_layers = os.path.join(cache_dir, 'esm_emb_layers_fp16.npy')
+    p_single = os.path.join(cache_dir, 'esm_emb_fp16.npy')
+    if prefer == 'single':
+        p_emb = p_single
+    elif prefer == 'layers':
+        p_emb = p_layers
+    elif prefer == 'auto':
+        p_emb = p_layers if os.path.exists(p_layers) else p_single
+    else:
+        raise ValueError('prefer 只支持 auto/single/layers，收到 %r' % (prefer,))
     p_mask = os.path.join(cache_dir, 'esm_mask.npy')
     p_idx = os.path.join(cache_dir, 'esm_index.csv')
     for p in (p_emb, p_mask, p_idx):
@@ -250,3 +292,40 @@ def iter_batches(indices, batch_size, shuffle=False, seed=0):
         idx = idx[rng.permutation(len(idx))]
     for i in range(0, len(idx), batch_size):
         yield idx[i:i + batch_size]
+
+
+# ---------------------------------------------------------------- 序列 one-hot
+
+# 本数据集里恰好只有 20 种标准氨基酸（没有 X/U/O/B/Z），所以顺序即字典
+AA_ORDER = 'ACDEFGHIKLMNPQRSTVWY'
+AA_INDEX = {a: i for i, a in enumerate(AA_ORDER)}
+
+
+def seq_onehot(sequences, lmax=None, offset=0, dtype=np.float32):
+    """把序列编码成 [N, L, 20] 的 one-hot，供 CfC 支路使用。
+
+    offset 用来对齐 ESM 的 token 网格：
+      * ESM 缓存里没有特殊 token（`cache_esm.py` 已把 <cls>/<eos> 切掉）→ offset=0
+      * `predict.py` 的 hidden_states 第 0 位是 <cls> → offset=1
+
+    返回 (onehot, lengths)。遇到非标准氨基酸直接报错，而不是悄悄置零 ——
+    置零等于把"未知残基"和"没有残基"混为一谈。
+    """
+    lengths = np.array([len(s) for s in sequences], dtype=np.int64)
+    L = int(lmax) if lmax else int(lengths.max()) + int(offset)
+    if lengths.max() + offset > L:
+        raise SystemExit('序列最长 %d（+offset %d）超过 lmax=%d'
+                         % (lengths.max(), offset, L))
+    out = np.zeros((len(sequences), L, len(AA_ORDER)), dtype=dtype)
+    bad = []
+    for i, s in enumerate(sequences):
+        for j, ch in enumerate(s):
+            k = AA_INDEX.get(ch)
+            if k is None:
+                bad.append((i, ch))
+                continue
+            out[i, j + offset, k] = 1.0
+    if bad:
+        raise SystemExit('序列里有非标准氨基酸 %r（只支持 %s）'
+                         % (bad[:5], AA_ORDER))
+    return out, lengths

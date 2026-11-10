@@ -35,9 +35,10 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 from src.checkpoint import load_head            # noqa: E402
-from src.data_io import apply_hand_scaler, load_hand_scaler  # noqa: E402
+from src.data_io import (apply_hand_scaler, load_hand_scaler,  # noqa: E402
+                         seq_onehot)
 from src.esm_backbone import residue_mask       # noqa: E402
-from src.features import compute_handcraft      # noqa: E402
+from src.features import compute_amphipath, compute_handcraft  # noqa: E402
 from src.utils import pick_device               # noqa: E402
 
 MAX_LEN = 1024
@@ -115,12 +116,26 @@ def main():
     if len(hand_dims) > 1:
         raise SystemExit('权重之间的 hand_dim 不一致：%s' % hand_dims)
     hand_dim = hand_dims.pop()
-    print('ESM: %s | hand_dim=%d | 每个头 %.1f MB'
-          % (esm_name, hand_dim, heads[0].size_mb()))
+    # 手工块是否追加了两亲性特征，必须由权重自己声明：算错维度比报错更危险
+    hand_extras = {m.get('hand_extra', '') for m in metas}
+    if len(hand_extras) > 1:
+        raise SystemExit('权重之间的 hand_extra 不一致：%s' % hand_extras)
+    hand_extra = hand_extras.pop()
+    # 多层 ESM：层号写在权重里，推理必须原样复现（换层 = 换表征）
+    layer_sets = {str(m.get('esm_layer_ids', '')) for m in metas}
+    if len(layer_sets) > 1:
+        raise SystemExit('权重之间的 esm_layer_ids 不一致：%s' % layer_sets)
+    layer_ids = [int(x) for x in layer_sets.pop().split(',') if x.strip() != ''] or [-1]
+    print('ESM: %s | hand_dim=%d%s | 层 %s | 每个头 %.1f MB'
+          % (esm_name, hand_dim, ' (+amphipath)' if hand_extra else '',
+             layer_ids, heads[0].size_mb()))
 
     # 每折各有一份标准化参数（只用该折训练行拟合），所以不能共用一个 hand 张量
     scalers = []
-    for p, m in zip(paths, metas):
+    for p, m, hd in zip(paths, metas, heads):
+        if not getattr(hd, 'use_hand', True):
+            scalers.append(None)          # 该头不用手工特征（--lnn-only），无需 scaler
+            continue
         if m.get('hand_norm', 'none') != 'standard':
             scalers.append(None)
             continue
@@ -160,16 +175,33 @@ def main():
             enc = {k: v.to(args.device) for k, v in enc.items()}
             # 与训练时一致：1 = 真实残基，<cls>/<eos>/<pad> 均为 0
             mask = residue_mask(enc, tok)
-            h = esm(**enc, output_hidden_states=True).hidden_states[-1]
-            hand_np = np.stack([compute_handcraft(s) for s in chunk], axis=0).astype(np.float32)
+            hs = esm(**enc, output_hidden_states=True).hidden_states
+            if len(layer_ids) > 1:
+                n_h = len(hs)
+                idx = [(i + n_h if i < 0 else i) for i in layer_ids]
+                h = torch.stack([hs[i] for i in idx], dim=1)   # [B, K, L, D]
+            else:
+                h = hs[layer_ids[0]]                            # [B, L, D]
+            rows = [compute_handcraft(s) for s in chunk]
+            if hand_extra == 'amphipath':
+                rows = [np.concatenate([base, compute_amphipath(s)], axis=0)
+                        for base, s in zip(rows, chunk)]
+            elif hand_extra not in ('', None):
+                raise SystemExit('权重声明的 hand_extra=%r 不认识' % (hand_extra,))
+            hand_np = np.stack(rows, axis=0).astype(np.float32)
             if hand_np.shape[1] != hand_dim:
-                raise SystemExit('手工特征维度 %d 与权重要求的 %d 不一致'
-                                 % (hand_np.shape[1], hand_dim))
+                raise SystemExit('手工特征维度 %d 与权重要求的 %d 不一致（hand_extra=%r）'
+                                 % (hand_np.shape[1], hand_dim, hand_extra))
+            # CfC 要和 hidden_states 的 token 网格对齐：第 0 位是 <cls>，残基右移一位
+            seq_t = None
+            if any(getattr(hd, 'lnn', False) for hd in heads):
+                oh, _ = seq_onehot(chunk, lmax=h.shape[1], offset=1)
+                seq_t = torch.from_numpy(oh).to(args.device)
             for j, head in enumerate(heads):
                 hj = hand_np if scalers[j] is None else apply_hand_scaler(hand_np, *scalers[j])
                 hand = torch.from_numpy(hj).to(args.device)
                 probs[i:i + len(chunk), j] = torch.sigmoid(
-                    head(h, mask, hand)).cpu().numpy()
+                    head(h, mask, hand, seq_t)).cpu().numpy()
             print('  %d/%d' % (min(i + args.batch_size, len(seqs)), len(seqs)), end='\r')
 
     out = pd.DataFrame({'sequence': seqs, 'prob_mean': probs.mean(axis=1),

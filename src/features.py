@@ -6,6 +6,7 @@ Handcrafted feature extraction for protein sequences
 import math
 import numpy as np
 from collections import Counter
+from numpy.lib.stride_tricks import sliding_window_view
 
 AA20 = "ACDEFGHIKLMNPQRSTVWY"
 AA_SET = set(AA20)
@@ -296,4 +297,94 @@ def handcraft_feature_names():
         for g in [1, 2, 3]:
             for p in ["0", "25", "50", "75", "100"]:
                 names.append(f"ctd_{prop}_dist_g{g}_p{p}")
+    return names
+
+
+# ------------------------------------------------------------------ 两亲性（疏水矩）
+#
+# 为什么单独算这一组
+# ------------------
+# 现有 694 维里，AAC 只有组成、没有相位；DPC 只看相邻一对；CTD 是分段统计。
+# 没有任何一维能表达"疏水残基每隔 3~4 个出现一次"，而这正是 α-螺旋两亲性
+# （AIP 的主要作用机制之一）的几何特征。ESM-2 理论上能学到，但让 2,998 条
+# 样本从零学出周期结构不现实，显式算给它更稳。
+#
+# 疏水矩 μH = |Σ h_n · exp(i·δ·n)| / N，δ=100°（理想 α-螺旋的残基转角）。
+# 按窗口长度归一化，不同长度的肽可比。
+
+EISENBERG_SCALE = {
+    "A": 0.25, "R": -1.76, "N": -0.64, "D": -0.72, "C": 0.04, "Q": -0.69,
+    "E": -0.62, "G": 0.16, "H": -0.40, "I": 0.73, "L": 0.53, "K": -1.10,
+    "M": 0.26, "F": 0.61, "P": -0.07, "S": -0.26, "T": -0.18, "W": 0.37,
+    "Y": 0.02, "V": 0.54,
+}
+
+AMPHIPATH_WINDOWS = (7, 11)     # 约 2 圈与 3 圈 α-螺旋
+AMPHIPATH_DELTA_DEG = 100.0
+AMPHIPATH_HELIX_PERIOD = 3.6
+AMPHIPATH_DIM = 10              # 4×2 + 2，见 amphipath_feature_names()
+
+
+def _hydrophobic_moment_profile(h, w):
+    """返回每个滑动窗的 μH（已按窗长归一化）与生效窗长。"""
+    L = int(h.size)
+    if L == 0:
+        return np.zeros(1), 0
+    w = int(min(w, L))
+    if w < 2:
+        return np.zeros(1), 0
+    win = sliding_window_view(h, w)                 # [n_windows, w]
+    ang = np.deg2rad(AMPHIPATH_DELTA_DEG) * np.arange(w)
+    real = (win * np.cos(ang)).sum(axis=1)
+    imag = (win * np.sin(ang)).sum(axis=1)
+    return np.sqrt(real ** 2 + imag ** 2) / w, w
+
+
+def compute_amphipath(seq: str) -> np.ndarray:
+    """10 维两亲性特征（走 --amphipath 时追加在 694 维之后）。"""
+    seq = clean_sequence(seq)
+    h = np.array([EISENBERG_SCALE.get(ch, 0.0) for ch in seq], dtype=np.float64)
+    L = h.size
+
+    feats = []
+    best_win_h = 0.0
+    for w in AMPHIPATH_WINDOWS:
+        mu, we = _hydrophobic_moment_profile(h, w)
+        if we < 2 or mu.size == 0:
+            feats.extend([0.0, 0.0, 0.0, 0.0])
+            continue
+        k = int(np.argmax(mu))
+        # 峰位置归一化到 [0,1]，消掉长度量纲
+        pos = k / max(mu.size - 1, 1)
+        feats.extend([float(mu.max()), float(mu.mean()), float(mu.std()), float(pos)])
+        if w == max(AMPHIPATH_WINDOWS):
+            best_win_h = float(h[k:k + we].mean())
+
+    # 3.6 残基周期的功率占比：把疏水性序列当信号做 FFT，看螺旋周期占多少能量
+    if L >= 6:
+        hc = h - h.mean()
+        power = np.abs(np.fft.rfft(hc)) ** 2
+        power = power[1:]                            # 去掉直流项
+        freqs = np.fft.rfftfreq(L)[1:]
+        if power.sum() > 0 and freqs.size and np.all(freqs > 0):
+            k = int(np.argmin(np.abs(1.0 / freqs - AMPHIPATH_HELIX_PERIOD)))
+            helix_ratio = float(power[k] / power.sum())
+        else:
+            helix_ratio = 0.0
+    else:
+        helix_ratio = 0.0
+    feats.extend([helix_ratio, best_win_h])
+
+    arr = np.asarray(feats, dtype=np.float32)
+    if arr.size != AMPHIPATH_DIM:
+        raise AssertionError('两亲性特征维度 %d ≠ %d' % (arr.size, AMPHIPATH_DIM))
+    return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def amphipath_feature_names():
+    names = []
+    for w in AMPHIPATH_WINDOWS:
+        names += [f"amph_mu{w}_max", f"amph_mu{w}_mean", f"amph_mu{w}_std",
+                  f"amph_mu{w}_argmax"]
+    names += ["amph_helix_power", "amph_best_window_hydrophobicity"]
     return names

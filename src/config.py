@@ -45,9 +45,30 @@ class ModelCfg:
     #               'peptide_bn'   = masked BN + 按肽等权（掩掉 padding，每条肽投一票）
     #               'masked_batch' = masked BN，按残基位置等权（长肽权重更大）
     #               'batch'        = 原生 BatchNorm1d（padding 进统计量，仅消融/旧权重）
-    norm: str = 'layer'
+    # 默认 peptide_bn：掩掉 padding、按肽等权，是 2026-11-10 定下的基线配置。
+    norm: str = 'peptide_bn'
     # 手工特征标准化：'standard' = 每折只用训练行拟合 mean/std；'none' = 旧行为（不推荐）
     hand_norm: str = 'standard'
+    # 手工块追加项：'amphipath' = 694 + 10 维两亲性（704，**默认**）；
+    #               '' = 只保留 694 维基础块（消融用，CLI 加 --no-amphipath）
+    hand_extra: str = 'amphipath'
+    # ---- CfC（LNN）序列支路 ----
+    # 直接把 one-hot 序列喂进闭式 CfC，池化后与 ESM/手工特征 concat。
+    # 不加 router：静态权重会被下一层 Linear 吸收，等于没加。
+    lnn: bool = False
+    lnn_dim: int = 128        # 用户定的 128（原设计 64）
+    lnn_dt: float = 1.0       # Δt；"一个残基 = 一个时间步"，做机制实验时可缩放
+    # 支路开关：--lnn-only 关掉 ESM 与手工特征，只留 CfC（探针实验用）
+    use_esm: bool = True
+    use_hand: bool = True
+    # ---- 多层 ESM 融合 ----
+    # 缓存里存 K 层时（cache_esm.py --layers 24,30,33），这里决定怎么合成一层：
+    #   'weighted' = softmax 出来的 K 个标量权重（只多 K 个参数，推荐）
+    #   'mean'     = 等权平均；'last' = 只用最后一层（等价单层）
+    esm_fuse: str = 'weighted'
+    esm_layers: int = 1
+    # 缓存里实际存了哪几层，由 train 脚本从 esm_meta.json 填进来，写进权重供推理复现
+    esm_layer_ids: str = ''
 
 
 @dataclass
@@ -151,9 +172,13 @@ class RunCfg:
     def diff(self):
         """给人看的开关摘要，写进日志首行"""
         return ('fold=%d seed=%d ema=%s alpha_min=%.2f start=%d tau=%.2f '
-                'pos_weight=%.2f epochs=%d bs=%d lr=%g norm=%s hand_norm=%s'
+                'pos_weight=%.2f epochs=%d bs=%d lr=%g norm=%s hand_norm=%s '
+                'hand_extra=%s lnn=%s lnn_dim=%d lnn_dt=%.2f use_esm=%s use_hand=%s'
                 % (self.fold, self.train.seed,
                    self.ema.enabled, self.ema.alpha_min,
                    self.ema.start_epoch, self.ema.tau, self.train.pos_weight,
                    self.train.epochs, self.train.batch_size, self.train.lr,
-                   self.model.norm, self.model.hand_norm))
+                   self.model.norm, self.model.hand_norm,
+                   self.model.hand_extra or '-',
+                   self.model.lnn, self.model.lnn_dim, self.model.lnn_dt,
+                   self.model.use_esm, self.model.use_hand))

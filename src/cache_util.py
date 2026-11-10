@@ -6,14 +6,22 @@
 情况下判断/清理缓存。cache_esm.py 需要 GPU，但清理缓存不需要。
 """
 
-ESM_FILES = ('esm_emb_fp16.npy', 'esm_mask.npy', 'esm_index.csv', 'esm_meta.json')
+ESM_FILES = ('esm_emb_fp16.npy', 'esm_mask.npy', 'esm_index.csv', 'esm_meta.json',
+             'esm_emb_layers_fp16.npy')
+
+# 单层缓存 esm_emb_fp16.npy 与多层缓存 esm_emb_layers_fp16.npy 二选一；两者同时
+# 存在时 load_esm_cache 优先用多层（meta 里 layout 会说明是哪一种）。
+EMB_ALIASES = ('esm_emb_layers_fp16.npy', 'esm_emb_fp16.npy')
 
 import os  # noqa: E402
 
 
 def has_cache(cache_dir):
-    """emb / mask / index 三个文件齐了才算有缓存"""
-    return all(os.path.exists(os.path.join(cache_dir, fn)) for fn in ESM_FILES[:3])
+    """mask / index 齐了、且两种 emb 至少有一个，才算有缓存"""
+    ok = all(os.path.exists(os.path.join(cache_dir, fn))
+             for fn in ('esm_mask.npy', 'esm_index.csv'))
+    emb = any(os.path.exists(os.path.join(cache_dir, fn)) for fn in EMB_ALIASES)
+    return ok and emb
 
 
 def cache_size_mb(cache_dir):

@@ -45,7 +45,7 @@ def residue_mask(enc, tok):
 
 class ESMBackbone:
     def __init__(self, name='facebook/esm2_t33_650M_UR50D', device='auto',
-                 layer=-1, max_len=1024):
+                 layer=-1, max_len=1024, dtype='fp32'):
         from transformers import AutoModel, AutoTokenizer
 
         from .utils import pick_device
@@ -54,9 +54,30 @@ class ESMBackbone:
         self.device = pick_device(device)
         self.layer = layer
         self.max_len = max_len
+        self.dtype = dtype
+
+        # 大模型（3B）在 fp32 下要 12 GB，这台 24 GB 的机器直接 OOM；
+        # fp16 只要 5.7 GB。冻结只省梯度/优化器状态，权重本身照样驻留。
+        dtype_kw = {}
+        if dtype in ('fp16', 'float16', 'half'):
+            dtype_kw['torch_dtype'] = torch.float16
+        elif dtype in ('bf16', 'bfloat16'):
+            dtype_kw['torch_dtype'] = torch.bfloat16
+        elif dtype not in ('fp32', 'float32'):
+            raise ValueError('dtype 只支持 fp32/fp16/bf16，收到 %r' % (dtype,))
 
         self.tok = AutoTokenizer.from_pretrained(name)
-        self.model = AutoModel.from_pretrained(name).to(self.device).eval()
+        try:
+            # low_cpu_mem_usage 必须和 device_map 一起用：只给前者时权重停在
+            # meta device 上，随后 .to() 会抛 "Cannot copy out of meta tensor"
+            self.model = AutoModel.from_pretrained(
+                name, low_cpu_mem_usage=True, device_map=self.device, **dtype_kw)
+        except (ImportError, ValueError, RuntimeError, KeyError) as exc:
+            print('[warn] low_cpu_mem_usage/device_map 不可用（%s: %s），退回普通加载；'
+                  '换 3B 这种大模型时峰值内存会翻倍'
+                  % (type(exc).__name__, str(exc)[:120]))
+            self.model = AutoModel.from_pretrained(name, **dtype_kw).to(self.device)
+        self.model = self.model.eval()
         for p in self.model.parameters():
             p.requires_grad = False
 
@@ -79,5 +100,31 @@ class ESMBackbone:
         enc = {k: v.to(self.device) for k, v in enc.items()}
         out = self.model(**enc, output_hidden_states=True)
         h = out.hidden_states[self.layer]
+        mask = residue_mask(enc, self.tok)
+        return h.float().cpu().numpy(), mask.cpu().numpy().astype(np.uint8)
+
+    @torch.no_grad()
+    def encode_layers(self, seqs, layers):
+        """取多层隐状态：layers=[24,30,33] → h [B, K, L, D]（K=len(layers)）。
+
+        为什么要多层：只用最后一层是"默认"，不是"最优"。不同任务的最佳层不同，
+        而层选择本身是零成本的超参（见 model_aip.AIPHead.fuse_layers）。
+        层号允许负数（-1 = 最后一层），与 hidden_states 的索引一致。
+        """
+        enc = self.tok(list(seqs), return_tensors='pt', padding=True,
+                       truncation=True, max_length=self.max_len)
+        enc = {k: v.to(self.device) for k, v in enc.items()}
+        out = self.model(**enc, output_hidden_states=True)
+        hs = out.hidden_states
+        n = len(hs)
+        picked = []
+        for L in layers:
+            i = int(L)
+            if i < 0:
+                i += n
+            if not (0 <= i < n):
+                raise ValueError('层号 %d 超出范围（共 %d 层）' % (L, n))
+            picked.append(hs[i])
+        h = torch.stack(picked, dim=1)                 # [B, K, L, D]
         mask = residue_mask(enc, self.tok)
         return h.float().cpu().numpy(), mask.cpu().numpy().astype(np.uint8)

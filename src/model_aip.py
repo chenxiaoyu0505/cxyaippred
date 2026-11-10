@@ -40,6 +40,8 @@ padding 处理（2026-11 修正）
 import torch
 import torch.nn as nn
 
+from .cfc import CfCBlock
+
 
 class ChannelNorm(nn.Module):
     """在 [B, C, L] 上做"逐位置、跨通道"归一化。
@@ -174,10 +176,26 @@ class ResBlock1D(nn.Module):
 
 
 class AIPHead(nn.Module):
-    """ESM 表示 + 手工特征 → AIP 概率（不含 ESM 本体）"""
+    """ESM 表示 [+ CfC 序列支路] + 手工特征 → AIP 概率（不含 ESM 本体）
+
+    CfC 支路（lnn=True）
+    -------------------
+        one-hot [B, L, 20] → CfCBlock(hidden=lnn_dim) → 掩码均值池化
+                          → LayerNorm → l [B, lnn_dim]
+
+    拼接顺序固定为 [ESM 池化 1280] + [l lnn_dim] + [手工特征 694]：手工特征永远
+    在最后，`hand_dim` 的切片语义不变。
+
+    为什么不加 router：静态的 (w_c, w_l, w_f) 会被下一层 Linear 完全吸收
+    （W(w·x) = (wW)x），权重不随样本变化就等于没加。先把支路接上、确认它带的
+    信息超不超噪声，再谈门控。
+    """
 
     def __init__(self, embed_dim=1280, hand_dim=694, hidden=512,
-                 n_res=2, cnn_drop=0.2, mlp_drop=0.3, norm='layer'):
+                 n_res=2, cnn_drop=0.2, mlp_drop=0.3, norm='layer',
+                 lnn=False, lnn_dim=128, lnn_dt=1.0,
+                 use_esm=True, use_hand=True,
+                 esm_layers=1, esm_fuse='weighted'):
         super().__init__()
         self.embed_dim = embed_dim
         self.hand_dim = hand_dim
@@ -186,46 +204,120 @@ class AIPHead(nn.Module):
         self.cnn_drop = cnn_drop
         self.mlp_drop = mlp_drop
         self.norm = norm
+        self.lnn = bool(lnn)
+        self.lnn_dim = int(lnn_dim)
+        self.lnn_dt = float(lnn_dt)
+        self.seq_dim = 20
+        # ---- 多层 ESM 融合 ----
+        # 输入可以是 [B, L, D]（单层）或 [B, K, L, D]（K 层，先融合再进卷积）。
+        # 'weighted' 只增加 K 个参数（softmax 权重），是最便宜的层选择方式。
+        self.esm_layers = int(esm_layers)
+        self.esm_fuse = str(esm_fuse)
+        if self.esm_layers > 1:
+            if self.esm_fuse not in ('weighted', 'mean', 'last'):
+                raise ValueError('esm_fuse 只支持 weighted/mean/last，收到 %r'
+                                 % (self.esm_fuse,))
+            if self.esm_fuse == 'weighted':
+                self.layer_w = nn.Parameter(torch.zeros(self.esm_layers))
+        # 支路开关：--lnn-only 时关掉 ESM 与手工特征，只留 CfC（探针实验用）
+        self.use_esm = bool(use_esm)
+        self.use_hand = bool(use_hand)
+        if not (self.use_esm or self.use_hand or self.lnn):
+            raise ValueError('AIPHead 至少要启用一条支路')
 
         # 用 ModuleList 而非 Sequential：每个 block 要把掩码透传下去
         self.cnn = nn.ModuleList([ResBlock1D(embed_dim, drop=cnn_drop, norm=norm)
-                                  for _ in range(n_res)])
+                                  for _ in range(n_res if self.use_esm else 0)])
+        if self.lnn:
+            self.cfc = CfCBlock(in_dim=self.seq_dim, hidden=self.lnn_dim,
+                                dt=self.lnn_dt)
+            self.seq_norm = nn.LayerNorm(self.lnn_dim)
+
+        feat_dim = ((embed_dim if self.use_esm else 0)
+                    + (hand_dim if self.use_hand else 0)
+                    + (self.lnn_dim if self.lnn else 0))
+        self.feat_dim = int(feat_dim)
         self.shared = nn.Sequential(
-            nn.Linear(embed_dim + hand_dim, hidden), nn.ReLU(), nn.Dropout(mlp_drop)
+            nn.Linear(feat_dim, hidden), nn.ReLU(), nn.Dropout(mlp_drop)
         )
         self.out = nn.Sequential(
             nn.Linear(hidden, hidden), nn.ReLU(), nn.Dropout(mlp_drop), nn.Linear(hidden, 1)
         )
 
-    def forward(self, hidden_states, attention_mask, hand_feats=None):
+    def fuse_layers(self, hidden_states):
+        """[B, K, L, D] → [B, L, D]。
+
+        'weighted' 的权重是 softmax 出来的 K 个标量（初始化均匀 1/K）；
+        训练完把 `head.layer_w.softmax(0)` 打出来，就能说清"哪一层在起作用"。
         """
-        hidden_states : [B, L, D]  ESM-2 最后一层隐状态
+        if hidden_states.dim() == 3:
+            return hidden_states
+        if hidden_states.dim() != 4:
+            raise ValueError('hidden_states 应为 [B,L,D] 或 [B,K,L,D]，收到 %s'
+                             % (tuple(hidden_states.shape),))
+        if self.esm_layers <= 1:
+            raise ValueError('缓存给了 %d 层，但这个头是单层（esm_layers=1）；'
+                             '要么用 --esm-fuse 训练多层头，要么加 --esm-cache single'
+                             % hidden_states.shape[1])
+        if self.esm_fuse == 'last':
+            return hidden_states[:, -1]
+        if self.esm_fuse == 'mean':
+            return hidden_states.mean(dim=1)
+        w = torch.softmax(self.layer_w, dim=0).to(hidden_states.dtype)
+        return (hidden_states * w.view(1, -1, 1, 1)).sum(dim=1)
+
+    def forward(self, hidden_states, attention_mask, hand_feats=None, seq=None,
+                return_decay=False):
+        """
+        hidden_states : [B, L, D] 或 [B, K, L, D]  ESM-2 隐状态
         attention_mask: [B, L]     1 = 有效残基
         hand_feats    : [B, hand_dim] 或 None（hand_dim > 0 时必需）
+        seq           : [B, L, 20]   CfC 用的 one-hot（lnn=True 时必需）
+        return_decay  : True 时额外返回 decay [B, L, lnn_dim]，供可解释性用
         """
+        if hidden_states is not None and hidden_states.dim() == 4:
+            hidden_states = self.fuse_layers(hidden_states)
+        ref = hidden_states if hidden_states is not None else seq
         if attention_mask is None:
-            mask = torch.ones(hidden_states.shape[:2], dtype=torch.bool,
-                              device=hidden_states.device)
+            if ref is None:
+                raise ValueError('必须给出 attention_mask 或 seq')
+            mask = torch.ones(ref.shape[:2], dtype=torch.bool, device=ref.device)
         else:
             mask = attention_mask.bool()
-        m = mask.unsqueeze(1).to(hidden_states.dtype)               # [B, 1, L]
 
-        x = hidden_states.transpose(1, 2) * m                       # pad 隐状态先清零
-        for block in self.cnn:
-            x = block(x, m)                                         # 每次卷积后重新置零
+        parts = []
+        if self.use_esm:
+            if hidden_states is None:
+                raise ValueError('AIPHead(use_esm=True) 需要 hidden_states')
+            m = mask.unsqueeze(1).to(hidden_states.dtype)           # [B, 1, L]
+            x = hidden_states.transpose(1, 2) * m                   # pad 隐状态先清零
+            for block in self.cnn:
+                x = block(x, m)                                     # 每次卷积后重新置零
+            cnt = m.sum(dim=2).clamp(min=1.0)                       # [B, 1]
+            parts.append((x * m).sum(dim=2) / cnt)                  # [B, D]
 
-        cnt = m.sum(dim=2).clamp(min=1.0)                           # [B, 1]
-        pooled = (x * m).sum(dim=2) / cnt                           # [B, D]
+        decay = None
+        if self.lnn:
+            if seq is None:
+                raise ValueError('AIPHead(lnn=True) 需要 seq=[B, L, 20]')
+            hs, decay = self.cfc(seq, mask.to(seq.dtype))
+            # CfC 只递推到 batch 内最长的那条肽，掩码要跟着截断
+            mf = mask[:, :hs.shape[1]].unsqueeze(2).to(hs.dtype)     # [B, l_eff, 1]
+            cnt_l = mf.sum(dim=1).clamp(min=1.0)
+            parts.append(self.seq_norm((hs * mf).sum(dim=1) / cnt_l))
 
-        if self.hand_dim > 0 and hand_feats is not None:
-            pooled = torch.cat([pooled, hand_feats], dim=1)
+        if self.use_hand and self.hand_dim > 0 and hand_feats is not None:
+            parts.append(hand_feats)
 
-        return self.out(self.shared(pooled)).squeeze(1)             # [B]
+        feat = parts[0] if len(parts) == 1 else torch.cat(parts, dim=1)
+        logits = self.out(self.shared(feat)).squeeze(1)             # [B]
+        return (logits, decay) if return_decay else logits
 
     @torch.no_grad()
-    def predict_proba(self, hidden_states, attention_mask, hand_feats=None):
+    def predict_proba(self, hidden_states, attention_mask, hand_feats=None, seq=None):
         self.eval()
-        return torch.sigmoid(self.forward(hidden_states, attention_mask, hand_feats))
+        return torch.sigmoid(self.forward(hidden_states, attention_mask,
+                                          hand_feats, seq))
 
     def n_params(self):
         return sum(p.numel() for p in self.parameters())
