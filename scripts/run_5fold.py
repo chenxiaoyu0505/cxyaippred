@@ -151,6 +151,9 @@ def main():
     ap.add_argument('--norm', default='', choices=['', 'layer', 'peptide_bn', 'masked_batch', 'batch'],
                     help='残差块归一化（默认 layer；peptide_bn = masked BN + 按肽等权；'
                          'masked_batch = masked BN 按残基等权；batch = 原生 BN，仅消融）')
+    ap.add_argument('--lnn', action='store_true', help='启用 CfC(LNN) 序列支路')
+    ap.add_argument('--lnn-dim', type=int, default=128, help='CfC 隐藏维度（默认 128）')
+    ap.add_argument('--lnn-dt', type=float, default=1.0, help='CfC 的 Δt（默认 1.0）')
     ap.add_argument('--hand-norm', default='', choices=['', 'standard', 'none'],
                     help='手工特征标准化（默认 standard；none 为旧行为/消融）')
     ap.add_argument('--device', default='')
@@ -164,6 +167,8 @@ def main():
     ap.add_argument('--register', action='store_true',
                     help='跑完把本实验登记到 experiments/_index.csv（该总表被 git 跟踪，'
                          '默认不登记以免弄脏工作区；事后可用 scripts/register_exp.py 补登记）')
+    ap.add_argument('--lnn-only', action='store_true',
+                    help='探针：只训练 CfC 一条支路（关掉 ESM 与手工特征）')
     args = ap.parse_args()
 
     # ---- 实验名校验与重复保护 ----
@@ -258,6 +263,11 @@ def main():
                 cmd += ['--norm', args.norm]
             if args.hand_norm:
                 cmd += ['--hand-norm', args.hand_norm]
+            if args.lnn:
+                cmd += ['--lnn', '--lnn-dim', str(args.lnn_dim),
+                        '--lnn-dt', str(args.lnn_dt)]
+            if args.lnn_only:
+                cmd += ['--lnn-only']
             if args.device:
                 cmd += ['--device', args.device]
             run(cmd, '训练 fold%d / seed%d' % (k, seed))

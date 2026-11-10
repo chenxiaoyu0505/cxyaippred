@@ -48,6 +48,15 @@ class ModelCfg:
     norm: str = 'layer'
     # 手工特征标准化：'standard' = 每折只用训练行拟合 mean/std；'none' = 旧行为（不推荐）
     hand_norm: str = 'standard'
+    # ---- CfC（LNN）序列支路 ----
+    # 直接把 one-hot 序列喂进闭式 CfC，池化后与 ESM/手工特征 concat。
+    # 不加 router：静态权重会被下一层 Linear 吸收，等于没加。
+    lnn: bool = False
+    lnn_dim: int = 128        # 用户定的 128（原设计 64）
+    lnn_dt: float = 1.0       # Δt；"一个残基 = 一个时间步"，做机制实验时可缩放
+    # 支路开关：--lnn-only 关掉 ESM 与手工特征，只留 CfC（探针实验用）
+    use_esm: bool = True
+    use_hand: bool = True
 
 
 @dataclass
@@ -151,9 +160,12 @@ class RunCfg:
     def diff(self):
         """给人看的开关摘要，写进日志首行"""
         return ('fold=%d seed=%d ema=%s alpha_min=%.2f start=%d tau=%.2f '
-                'pos_weight=%.2f epochs=%d bs=%d lr=%g norm=%s hand_norm=%s'
+                'pos_weight=%.2f epochs=%d bs=%d lr=%g norm=%s hand_norm=%s '
+                'lnn=%s lnn_dim=%d lnn_dt=%.2f use_esm=%s use_hand=%s'
                 % (self.fold, self.train.seed,
                    self.ema.enabled, self.ema.alpha_min,
                    self.ema.start_epoch, self.ema.tau, self.train.pos_weight,
                    self.train.epochs, self.train.batch_size, self.train.lr,
-                   self.model.norm, self.model.hand_norm))
+                   self.model.norm, self.model.hand_norm,
+                   self.model.lnn, self.model.lnn_dim, self.model.lnn_dt,
+                   self.model.use_esm, self.model.use_hand))

@@ -43,7 +43,7 @@ from src.checkpoint import save_head                       # noqa: E402
 from src.config import RunCfg                              # noqa: E402
 from src.data_io import (apply_hand_scaler, fit_hand_scaler,  # noqa: E402
                          hand_feats, iter_batches, load_esm_cache,
-                         load_folds, load_table, save_hand_scaler)
+                         load_folds, load_table, save_hand_scaler, seq_onehot)
 from src.ema_sat import EMASAT                             # noqa: E402
 from src.manifest import sha256_file                       # noqa: E402
 from src.metrics import threshold_free                       # noqa: E402
@@ -55,7 +55,7 @@ from src.utils import ensure_dir, pick_device, save_json, seed_everything  # noq
 # ---------------------------------------------------------------- 预测
 
 @torch.no_grad()
-def predict_ordered(head, idx, emb, mask, hand, device, batch_size=64):
+def predict_ordered(head, idx, emb, mask, hand, device, batch_size=64, seq=None):
     """按 idx 的原始顺序返回概率（不重排）"""
     head.eval()
     out = np.zeros(len(idx), dtype=np.float64)
@@ -64,14 +64,17 @@ def predict_ordered(head, idx, emb, mask, hand, device, batch_size=64):
         h = torch.from_numpy(np.asarray(emb[b], dtype=np.float32)).to(device)
         m = torch.from_numpy(np.asarray(mask[b])).to(device).float()
         hf = torch.from_numpy(hand[b]).to(device)
-        out[s:s + len(b)] = torch.sigmoid(head(h, m, hf)).cpu().numpy()
+        sq = None
+        if seq is not None:
+            sq = torch.from_numpy(np.asarray(seq[b], dtype=np.float32)).to(device)
+        out[s:s + len(b)] = torch.sigmoid(head(h, m, hf, sq)).cpu().numpy()
     return out
 
 
 # ---------------------------------------------------------------- 训练一步
 
 def train_epoch(head, opt, sat, tr_idx, emb, mask, hand, y, cfg, device,
-                pos_weight=None):
+                pos_weight=None, seq=None):
     head.train()
     perm_rng = np.random.RandomState(cfg.train.seed * 1000 + sat.epoch)
     order = tr_idx[perm_rng.permutation(len(tr_idx))]
@@ -82,8 +85,11 @@ def train_epoch(head, opt, sat, tr_idx, emb, mask, hand, y, cfg, device,
         m = torch.from_numpy(np.asarray(mask[b])).to(device).float()
         hf = torch.from_numpy(hand[b]).to(device)
         yb = torch.from_numpy(y[b]).to(device)
+        sq = None
+        if seq is not None:
+            sq = torch.from_numpy(np.asarray(seq[b], dtype=np.float32)).to(device)
 
-        logits = head(h, m, hf)
+        logits = head(h, m, hf, sq)
         target = sat.targets(b, yb).to(device)
         loss = F.binary_cross_entropy_with_logits(logits, target,
                                                   pos_weight=pos_weight)
@@ -136,11 +142,18 @@ def main():
     ap.add_argument('--hand-norm', default='', choices=['', 'standard', 'none'],
                     help='手工特征标准化。默认 standard（每折只用训练行拟合 mean/std）；'
                          'none 为旧行为，694 维里基本只有 mw/charg 起作用')
+    ap.add_argument('--lnn', action='store_true',
+                    help='启用 CfC(LNN) 序列支路：one-hot → 闭式 CfC → 池化 → concat')
+    ap.add_argument('--lnn-dim', type=int, default=128, help='CfC 隐藏维度（默认 128）')
+    ap.add_argument('--lnn-dt', type=float, default=1.0,
+                    help='CfC 的 Δt（默认 1.0 = 一个残基一个时间步）')
     ap.add_argument('--device', default='auto',
                     help='auto/cuda/mps/cpu，默认自动选择')
     ap.add_argument('--run-name', default='', help='默认 fold{k}_{split_id}_m{seed}')
     ap.add_argument('--overwrite', action='store_true', help='run 目录已存在时覆盖')
     ap.add_argument('--quiet', action='store_true')
+    ap.add_argument('--lnn-only', action='store_true',
+                    help='探针：只训练 CfC 一条支路（关掉 ESM 与手工特征）')
     args = ap.parse_args()
 
     cfg = RunCfg(fold=args.fold, exp=args.exp)
@@ -167,6 +180,14 @@ def main():
         cfg.model.norm = args.norm
     if args.hand_norm:
         cfg.model.hand_norm = args.hand_norm
+    cfg.model.lnn = bool(args.lnn)
+    cfg.model.lnn_dim = args.lnn_dim
+    cfg.model.lnn_dt = args.lnn_dt
+    if args.lnn_only:
+        # 探针实验：回答"这条支路自己有没有信号"，先于任何融合尝试
+        cfg.model.lnn = True
+        cfg.model.use_esm = False
+        cfg.model.use_hand = False
 
     run_name = args.run_name or cfg.run_name()
     if args.out:
@@ -191,7 +212,10 @@ def main():
     y = table['label'].values.astype(np.float32)
     folds = load_folds(cfg.data.folds_csv, cfg.fold, table)
     hand = hand_feats(table, cfg.data.cache_dir)
-    if cfg.model.hand_norm == 'standard':
+    if not cfg.model.use_hand:
+        h_mean = h_std = None
+        print('[%s] 手工特征支路已关闭（--lnn-only），不做标准化' % run_name)
+    elif cfg.model.hand_norm == 'standard':
         # 只在本折训练行上拟合：val/test 的统计量参与进来就是泄漏
         h_mean, h_std = fit_hand_scaler(hand, folds['train'])
         hand = apply_hand_scaler(hand, h_mean, h_std)
@@ -203,6 +227,20 @@ def main():
         print('[%s] [warn] hand_norm=%s：手工特征未标准化，'
               '694 维里基本只有 mw/charg 两项在起作用' % (run_name, cfg.model.hand_norm))
     emb, mask = load_esm_cache(cfg.data.cache_dir, table)
+
+    # ---- CfC 支路的输入：与 ESM 缓存逐行对齐的 one-hot ----
+    seq = None
+    if cfg.model.lnn:
+        seq, lens = seq_onehot(table['sequence'].values, lmax=mask.shape[1])
+        cached = np.asarray(mask, dtype=np.int64).sum(axis=1)
+        bad = np.where(cached != lens)[0]
+        if len(bad):
+            raise SystemExit(
+                '序列长度与 ESM 掩码对不上（首个第 %d 行：序列 %d vs 掩码 %d），'
+                '请重建缓存：python scripts/cache_esm.py --force'
+                % (bad[0], lens[bad[0]], cached[bad[0]]))
+        print('[%s] CfC 支路：one-hot %s，hidden=%d，Δt=%.2f'
+              % (run_name, seq.shape, cfg.model.lnn_dim, cfg.model.lnn_dt))
 
     # ---- 标签噪声注入（可审计：翻转了哪些行全部落盘）----
     y_fit = y
@@ -239,7 +277,13 @@ def main():
     head = AIPHead(embed_dim=cfg.model.embed_dim, hand_dim=cfg.model.hand_dim,
                    hidden=cfg.model.hidden, n_res=cfg.model.n_res,
                    cnn_drop=cfg.model.cnn_drop, mlp_drop=cfg.model.mlp_drop,
-                   norm=cfg.model.norm).to(device)
+                   norm=cfg.model.norm,
+                   lnn=cfg.model.lnn, lnn_dim=cfg.model.lnn_dim,
+                   lnn_dt=cfg.model.lnn_dt,
+                   use_esm=cfg.model.use_esm, use_hand=cfg.model.use_hand).to(device)
+    print('[%s] 模型 %.2fM 参数 / %.1f MB（lnn=%s esm=%s hand=%s feat=%d）'
+          % (run_name, head.n_params() / 1e6, head.size_mb(), head.lnn,
+             head.use_esm, head.use_hand, head.feat_dim))
     opt = torch.optim.Adam(head.parameters(), lr=cfg.train.lr,
                            weight_decay=cfg.train.weight_decay)
     sat = EMASAT(n, alpha_min=cfg.ema.alpha_min, decay=cfg.ema.decay,
@@ -255,16 +299,16 @@ def main():
     for epoch in range(cfg.train.epochs):
         sat.set_epoch(epoch)
         loss = train_epoch(head, opt, sat, folds['train'], emb, mask, hand, y_fit,
-                           cfg, device, pos_weight)
+                           cfg, device, pos_weight, seq=seq)
 
         # 教师用 epoch 末、eval 模式的预测更新一次；避免 drop-out / 更新前 logits 噪声。
         if cfg.ema.enabled:
             train_p = predict_ordered(head, folds['train'], emb, mask, hand, device,
-                                      cfg.train.batch_size)
+                                      cfg.train.batch_size, seq=seq)
             sat.update(folds['train'], train_p)
 
         val_p = predict_ordered(head, folds['val'], emb, mask, hand, device,
-                                cfg.train.batch_size)
+                                cfg.train.batch_size, seq=seq)
         val_aupr = threshold_free(y[folds['val']], val_p)['aupr']
         val_auc = threshold_free(y[folds['val']], val_p)['auroc']
         st = sat.stats()
@@ -306,7 +350,7 @@ def main():
 
     # ---- 落盘：概率 ----
     all_p = predict_ordered(head, np.arange(n), emb, mask, hand, device,
-                            max(cfg.train.batch_size, 64))
+                            max(cfg.train.batch_size, 64), seq=seq)
     val_p = all_p[folds['val']]
     test_p = all_p[folds['test']]
 
@@ -336,6 +380,8 @@ def main():
         'threshold': thr['threshold'], 'val_aupr': best_aupr,
         'split_id': cfg.data.split_id,
         'hand_norm': cfg.model.hand_norm,
+        'lnn': cfg.model.lnn, 'lnn_dim': cfg.model.lnn_dim,
+        'use_esm': cfg.model.use_esm, 'use_hand': cfg.model.use_hand,
         'train_data': os.path.basename(cfg.data.folds_csv),
         'note': 'single-task AIP head; metrics computed by eval_aip.py',
     })

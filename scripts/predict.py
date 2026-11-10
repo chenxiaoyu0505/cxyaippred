@@ -35,7 +35,8 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 from src.checkpoint import load_head            # noqa: E402
-from src.data_io import apply_hand_scaler, load_hand_scaler  # noqa: E402
+from src.data_io import (apply_hand_scaler, load_hand_scaler,  # noqa: E402
+                         seq_onehot)
 from src.esm_backbone import residue_mask       # noqa: E402
 from src.features import compute_handcraft      # noqa: E402
 from src.utils import pick_device               # noqa: E402
@@ -120,7 +121,10 @@ def main():
 
     # 每折各有一份标准化参数（只用该折训练行拟合），所以不能共用一个 hand 张量
     scalers = []
-    for p, m in zip(paths, metas):
+    for p, m, hd in zip(paths, metas, heads):
+        if not getattr(hd, 'use_hand', True):
+            scalers.append(None)          # 该头不用手工特征（--lnn-only），无需 scaler
+            continue
         if m.get('hand_norm', 'none') != 'standard':
             scalers.append(None)
             continue
@@ -165,11 +169,16 @@ def main():
             if hand_np.shape[1] != hand_dim:
                 raise SystemExit('手工特征维度 %d 与权重要求的 %d 不一致'
                                  % (hand_np.shape[1], hand_dim))
+            # CfC 要和 hidden_states 的 token 网格对齐：第 0 位是 <cls>，残基右移一位
+            seq_t = None
+            if any(getattr(hd, 'lnn', False) for hd in heads):
+                oh, _ = seq_onehot(chunk, lmax=h.shape[1], offset=1)
+                seq_t = torch.from_numpy(oh).to(args.device)
             for j, head in enumerate(heads):
                 hj = hand_np if scalers[j] is None else apply_hand_scaler(hand_np, *scalers[j])
                 hand = torch.from_numpy(hj).to(args.device)
                 probs[i:i + len(chunk), j] = torch.sigmoid(
-                    head(h, mask, hand)).cpu().numpy()
+                    head(h, mask, hand, seq_t)).cpu().numpy()
             print('  %d/%d' % (min(i + args.batch_size, len(seqs)), len(seqs)), end='\r')
 
     out = pd.DataFrame({'sequence': seqs, 'prob_mean': probs.mean(axis=1),

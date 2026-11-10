@@ -250,3 +250,40 @@ def iter_batches(indices, batch_size, shuffle=False, seed=0):
         idx = idx[rng.permutation(len(idx))]
     for i in range(0, len(idx), batch_size):
         yield idx[i:i + batch_size]
+
+
+# ---------------------------------------------------------------- 序列 one-hot
+
+# 本数据集里恰好只有 20 种标准氨基酸（没有 X/U/O/B/Z），所以顺序即字典
+AA_ORDER = 'ACDEFGHIKLMNPQRSTVWY'
+AA_INDEX = {a: i for i, a in enumerate(AA_ORDER)}
+
+
+def seq_onehot(sequences, lmax=None, offset=0, dtype=np.float32):
+    """把序列编码成 [N, L, 20] 的 one-hot，供 CfC 支路使用。
+
+    offset 用来对齐 ESM 的 token 网格：
+      * ESM 缓存里没有特殊 token（`cache_esm.py` 已把 <cls>/<eos> 切掉）→ offset=0
+      * `predict.py` 的 hidden_states 第 0 位是 <cls> → offset=1
+
+    返回 (onehot, lengths)。遇到非标准氨基酸直接报错，而不是悄悄置零 ——
+    置零等于把"未知残基"和"没有残基"混为一谈。
+    """
+    lengths = np.array([len(s) for s in sequences], dtype=np.int64)
+    L = int(lmax) if lmax else int(lengths.max()) + int(offset)
+    if lengths.max() + offset > L:
+        raise SystemExit('序列最长 %d（+offset %d）超过 lmax=%d'
+                         % (lengths.max(), offset, L))
+    out = np.zeros((len(sequences), L, len(AA_ORDER)), dtype=dtype)
+    bad = []
+    for i, s in enumerate(sequences):
+        for j, ch in enumerate(s):
+            k = AA_INDEX.get(ch)
+            if k is None:
+                bad.append((i, ch))
+                continue
+            out[i, j + offset, k] = 1.0
+    if bad:
+        raise SystemExit('序列里有非标准氨基酸 %r（只支持 %s）'
+                         % (bad[:5], AA_ORDER))
+    return out, lengths
