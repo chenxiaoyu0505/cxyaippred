@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-权重文件格式（v3）
+权重文件格式（v2）
 
-一个 fold 一个文件，只装 AIPHead（约 85 MB），不含 ESM-2：
+一个 fold 一个文件，只装 AIPHead（约 80 MB），不含 ESM-2：
 
     {
       'format': 'cxyaippred-aip-head-v2',
       'meta': {
-          'embed_dim': 1280, 'hand_dim': 694, 'hidden': 512,
+          'embed_dim': 1280, 'hand_dim': 704, 'hidden': 512,
           'n_res': 2, 'cnn_drop': 0.2, 'mlp_drop': 0.3,
-          'norm': 'layer',              # v2 起：残差块用逐位置 LayerNorm
+          'norm': 'peptide_bn',         # v2 起：掩码 BN，按肽等权
           'esm_name': 'facebook/esm2_t33_650M_UR50D',
           'esm_layer': -1,
           'threshold': 0.487,          # 该 fold 的验证集选出的阈值，仅作参考
@@ -26,7 +26,7 @@
 为什么不存 ESM：ESM-2 权重 2.43 GB、完全冻结、所有 fold 相同；
 存 5 份等于把同一份 12 GB 数据复制 5 遍。
 
-手工特征的标准化参数（mean/std，各 694 个 float）不写进 meta，而是和权重
+手工特征的标准化参数（mean/std，各 704 个 float）不写进 meta，而是和权重
 放同一目录的 hand_scaler.npz：它属于"这一折的训练集"，不属于网络结构，
 单独放便于事后审计"标准化是用哪些行算的"。
 """
@@ -99,7 +99,7 @@ def sha256_file(path, chunk=1 << 20):
 def extract_from_legacy(ckpt_path, out_path, threshold=0.487, fold=None, seed=None,
                         train_sha256=None, note=''):
     """
-    把旧双任务 checkpoint（含 ESM，2.69 GB）里的 AIP 头抽成新格式（85 MB）。
+    把旧双任务 checkpoint（含 ESM，2.69 GB）里的 AIP 头抽成新格式（约 80 MB）。
 
     旧结构：cnn.* / head.shared.* / head.head_aip.{0,3}.* / head.head_pip.*
     新结构：cnn.* / shared.* / out.{0,3}.*
@@ -120,6 +120,7 @@ def extract_from_legacy(ckpt_path, out_path, threshold=0.487, fold=None, seed=No
             new[k] = v
 
     # 旧权重是 BatchNorm1d，所以显式构造 norm='batch' 的版本才能对上 bn1/bn2 键名
+    # 旧双任务头固定 694 维基础手工特征 + 原生 BatchNorm；仅用于迁移旧权重
     head = AIPHead(embed_dim=1280, hand_dim=694, hidden=512, norm='batch')
     missing, unexpected = head.load_state_dict(new, strict=False)
     if missing or unexpected:

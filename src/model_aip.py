@@ -6,9 +6,9 @@
 设计要点
 --------
 * ESM-2 是冻结的、所有 fold 共用同一份，因此**不进入权重文件**。
-  权重文件里只保存本文件定义的 AIPHead（约 21M 参数 / 85 MB）。
-* 5 折 = 5 个 AIPHead（各 ~85 MB），推理时共享一次 ESM-2 前向。
-* 结构沿用原框架：ResCNN(1280) → 掩码均值池化 → 拼接 694 维手工特征 → MLP。
+  权重文件里只保存本文件定义的 AIPHead（约 20.96M 参数 / 80 MB）。
+* 5 折 = 5 个 AIPHead（各 ~80 MB），推理时共享一次 ESM-2 前向。
+* 结构沿用原框架：ResCNN(1280) → 掩码均值池化 → 拼接 704 维手工特征 → MLP。
 
 padding 处理（2026-11 修正）
 ---------------------------
@@ -26,14 +26,15 @@ padding 处理（2026-11 修正）
 
 归一化是可选的（`norm=`），因为"修 bug"和"换归一化轴"是两个变量：
 
-    layer         逐位置 LayerNorm（默认，与 padding 无关）
-    peptide_bn    masked BN + 按肽等权（掩掉 padding，每条肽投一票）
+    layer         逐位置 LayerNorm（ResBlock 单用时的默认，与 padding 无关）
+    peptide_bn    masked BN + 按肽等权（训练默认；掩掉 padding，每条肽投一票）
     masked_batch  masked BN，按残基位置等权（长肽权重更大）
     batch         原生 BatchNorm1d（padding 进统计量，仅供 v1 权重/消融）
 
 用法
 ----
-    head = AIPHead(embed_dim=1280, hand_dim=694, hidden=512)
+    head = AIPHead(embed_dim=1280, hand_dim=704, hidden=512,
+                   norm='peptide_bn')
     logits = head(hidden_states, attention_mask, hand_feats)   # [B]
     probs = torch.sigmoid(logits)
 """
@@ -183,7 +184,7 @@ class AIPHead(nn.Module):
         one-hot [B, L, 20] → CfCBlock(hidden=lnn_dim) → 掩码均值池化
                           → LayerNorm → l [B, lnn_dim]
 
-    拼接顺序固定为 [ESM 池化 1280] + [l lnn_dim] + [手工特征 694]：手工特征永远
+    拼接顺序固定为 [ESM 池化 1280] + [l lnn_dim] + [手工特征 704]：手工特征永远
     在最后，`hand_dim` 的切片语义不变。
 
     为什么不加 router：静态的 (w_c, w_l, w_f) 会被下一层 Linear 完全吸收
@@ -191,8 +192,8 @@ class AIPHead(nn.Module):
     信息超不超噪声，再谈门控。
     """
 
-    def __init__(self, embed_dim=1280, hand_dim=694, hidden=512,
-                 n_res=2, cnn_drop=0.2, mlp_drop=0.3, norm='layer',
+    def __init__(self, embed_dim=1280, hand_dim=704, hidden=512,
+                 n_res=2, cnn_drop=0.2, mlp_drop=0.3, norm='peptide_bn',
                  lnn=False, lnn_dim=128, lnn_dt=1.0,
                  use_esm=True, use_hand=True,
                  esm_layers=1, esm_fuse='weighted'):

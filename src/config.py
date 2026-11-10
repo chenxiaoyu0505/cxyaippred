@@ -36,12 +36,13 @@ class ESMCfg:
 class ModelCfg:
     """AIPHead（不含 ESM）"""
     embed_dim: int = 1280
-    hand_dim: int = 694
+    # 占位默认；train_aip.py 会按实际手工特征矩阵覆盖（默认 amphipath=704，消融 694）
+    hand_dim: int = 704
     hidden: int = 512
     n_res: int = 2
     cnn_drop: float = 0.2
     mlp_drop: float = 0.3
-    # 残差块归一化：'layer'        = 逐位置 LayerNorm（与 padding 无关，2026-11 起的默认）
+    # 残差块归一化：'layer'        = 逐位置 LayerNorm（ResBlock 单独使用/显式指定时）
     #               'peptide_bn'   = masked BN + 按肽等权（掩掉 padding，每条肽投一票）
     #               'masked_batch' = masked BN，按残基位置等权（长肽权重更大）
     #               'batch'        = 原生 BatchNorm1d（padding 进统计量，仅消融/旧权重）

@@ -14,8 +14,9 @@ English | [中文](README.zh-CN.md)
 
 Given a peptide sequence, predict whether it is anti-inflammatory.
 
-- **Representation** — frozen ESM-2 (`esm2_t33_650M_UR50D`, layer 33) + 694 handcrafted
-  descriptors (AAC, GAAC, DPC, CKSAAGP, PAAC, CTD, 12 physicochemical properties)
+- **Representation** — frozen ESM-2 (`esm2_t33_650M_UR50D`, layer 33) + 704 handcrafted
+  descriptors (AAC, GAAC, DPC, CKSAAGP, PAAC, CTD, 12 physicochemical properties,
+  and 10 amphipathicity features)
 - **Head** — 2 residual 1D-conv blocks over the residue embeddings, masked mean pooling,
   concatenation with the handcrafted vector, shared 512-d layer, single logit
 - **Optional training trick** (off by default, ablatable):

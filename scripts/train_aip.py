@@ -247,7 +247,7 @@ def main():
     else:
         h_mean = h_std = None
         print('[%s] [warn] hand_norm=%s：手工特征未标准化，'
-              '694 维里基本只有 mw/charg 两项在起作用' % (run_name, cfg.model.hand_norm))
+              '手工特征里基本只有 mw/charg 两项在起作用' % (run_name, cfg.model.hand_norm))
     emb, mask = load_esm_cache(cfg.data.cache_dir, table,
                                prefer=args.esm_cache or 'auto')
     # 嵌入维度以缓存为准：换 ESM-2 3B(2560) / 小模型(320/480) 时不用改配置

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-把旧双任务 checkpoint（2.69 GB，含冻结 ESM）里的 AIP 头抽成新格式（约 85 MB）。
+把旧双任务 checkpoint（2.69 GB，含冻结 ESM）里的 AIP 头抽成新格式（约 80 MB）。
 
 用途：给 5 折重训一个"不差的初始化点"，或者只是想拿旧模型的 AIP 头做对照。
 

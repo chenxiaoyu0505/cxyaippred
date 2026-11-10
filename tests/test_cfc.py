@@ -78,17 +78,17 @@ def test_half_life():
 def test_head_param_delta():
     base = AIPHead()
     full = AIPHead(lnn=True, lnn_dim=128)
-    # 首层 1974→2102：+512*128；CfC 3*(20*128+128) + 3*(128*128)；LayerNorm 2*128
+    # 首层 1984→2112：+512*128；CfC 3*(20*128+128) + 3*(128*128)；LayerNorm 2*128
     expect = 512 * 128 + 3 * (20 * 128 + 128) + 3 * (128 * 128) + 2 * 128
     assert full.n_params() - base.n_params() == expect
-    assert full.feat_dim == 1280 + 128 + 694
+    assert full.feat_dim == 1280 + 128 + 704
 
 
 def test_head_forward_backward():
     head = AIPHead(lnn=True, lnn_dim=128)
     hs = torch.randn(3, 9, 1280)
     m = torch.ones(3, 9, dtype=torch.bool)
-    hand = torch.randn(3, 694)
+    hand = torch.randn(3, 704)
     seq = _onehot_batch(3, 9)
     logits, decay = head(hs, m, hand, seq, return_decay=True)
     assert logits.shape == (3,) and decay.shape == (3, 9, 128)
@@ -102,7 +102,7 @@ def test_lnn_requires_seq():
     head = AIPHead(lnn=True, lnn_dim=8)
     with pytest.raises(ValueError):
         head(torch.randn(2, 5, 1280), torch.ones(2, 5, dtype=torch.bool),
-             torch.randn(2, 694))
+             torch.randn(2, 704))
 
 
 def test_head_ignores_padding():
@@ -111,7 +111,7 @@ def test_head_ignores_padding():
     head = AIPHead(lnn=True, lnn_dim=16).eval()
     hs = torch.randn(1, 6, 1280)
     seq = _onehot_batch(1, 6)
-    hand = torch.randn(1, 694)
+    hand = torch.randn(1, 704)
     a = head(hs, torch.ones(1, 6, dtype=torch.bool), hand, seq)
     hs2 = torch.cat([hs, torch.randn(1, 4, 1280)], 1)
     seq2 = torch.cat([seq, torch.zeros(1, 4, 20)], 1)
@@ -148,7 +148,7 @@ def test_checkpoint_roundtrip_and_v2_compat():
         ck['meta'].pop('lnn_dim', None)
         torch.save(ck, p2)
         h3, _ = load_head(p2)
-        assert h3.lnn is False and h3.feat_dim == 1974
+        assert h3.lnn is False and h3.feat_dim == 1984
 
 
 def test_predict_offset_matches_cache_layout():
