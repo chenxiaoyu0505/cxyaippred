@@ -89,6 +89,45 @@
   - `@val` 阈值自动抬高到 0.657 后，MCC 与基线基本持平（0.3517 vs 0.3580），但 F1 仍低；说明 full 的主要问题是校准/阈值，不是排序。
   - **不能把 full 当作整体更优**；下一步必须拆 `cv5_ema` 与 `cv5_mcc`，确认是 EMA 带来稳定、还是 MCC 把概率推高。
 
+### #3 `cv5_ema_fix` —— 修正版 EMA-SAT（固定 α=0.7，教师 β=0.3）
+
+- **启动时间**：2026-11-10 09:22
+- **命令**：
+  ```powershell
+  D:\anaconda3\envs\esm2_env\python.exe scripts\run_5fold.py --exp cv5_ema_fix --ema --note "修正版EMA"
+  ```
+- **实际参数**：5 折 / seed 0 / 50 epochs / batch 16 / lr 1e-4；EMA 开，固定 `α=0.7`（教师 β=0.3）、`decay=0.9`、`start_epoch=1`；首次命中直接初始化，epoch 末 eval 模式更新。该结果来自旧 `--ema-alpha` 接口，当前 CLI 已改为 `--ema-alpha-min`。
+- **状态**：完成（2026-11-10 09:40）
+- **产物**：`experiments/cv5_ema_fix/{runs,results,manifest.json}`
+- **关键数字**（单折，mean ± sd）：
+  - AUROC **0.7294 ± 0.0100**（基线 0.7277 ± 0.0130，Δ +0.0018，p=0.621）
+  - AUPR **0.6515 ± 0.0104**（基线 0.6494 ± 0.0103，Δ +0.0021，p=0.631）
+  - MCC@0.5 **0.2947 ± 0.0493**（基线 0.3141 ± 0.0279，Δ −0.0195，p=0.336）
+  - MCC@val **0.3267 ± 0.0057**（基线 0.3580 ± 0.0259，Δ −0.0314，p=0.043）
+  - F1@val **0.5346 ± 0.0706**（基线 0.5829 ± 0.0391，Δ −0.0484，p=0.147）
+  - 校准：ECE **0.1290** / Brier **0.2221**（基线 0.1167 / 0.2171）
+- **结论**：实现修正后 EMA 不再卡在 0.5，但排序指标仍无显著增益，MCC@val 显著下降；SAT 不能作为主创新，只能作负结果/可选正则。
+- **下一步**：`cv5_ema_ramp` 用指数饱和硬标签权重 α（α_min=0.7、start=2、tau=1.0、decay=0.65）验证渐进 SAT；不要再用“教师权重 0.7”的旧解释。
+
+### #4 `cv5_ema_ramp` —— 指数饱和 EMA-SAT（α→0.7，已完成）
+
+- **首次启动**：2026-11-10 11:00（旧 β 语义，已终止）
+- **作废原因**：把 0.7 当成教师权重 β_max，实际应为硬标签权重 α_min=0.7（教师上限 0.3）。旧 run 的 fold0–fold2 产物只能当错误实现记录，不得作为结果。
+- **旧命令（不可再执行）**：
+  ```powershell
+  # 旧接口已删除；仅作历史记录
+  D:\anaconda3\envs\esm2_env\python.exe scripts\run_5fold.py --exp cv5_ema_ramp --ema --ema-beta-max 0.7 --ema-start-epoch 2 --ema-tau 1.0 --ema-decay 0.65 --note "指数饱和SAT"
+  ```
+- **新语义参数**：α_e = 0.7 + 0.3·exp(−(e−2+1)/1.0)；e=2/3/4/5 时 α=0.810/0.741/0.715/0.706，β=0.190/0.259/0.285/0.294。
+- **新命令**：
+  ```powershell
+  D:\anaconda3\envs\esm2_env\python.exe scripts\run_5fold.py --exp cv5_ema_ramp --ema --ema-alpha-min 0.7 --ema-start-epoch 2 --ema-tau 1.0 --ema-decay 0.65 --note "渐进SAT(alpha0.7)"
+  ```
+- **状态**：完成（2026-11-10 11:59；旧目录已移到 `_work/cv5_ema_ramp_beta07_invalid`）
+- **结果**（单折，mean ± sd）：AUROC **0.7293 ± 0.0147**（基线 0.7277 ± 0.0130，Δ +0.0016，p=0.775）；AUPR **0.6516 ± 0.0142**（基线 0.6494 ± 0.0103，Δ +0.0022，p=0.662）；MCC@0.5 **0.3410 ± 0.0276**（基线 0.3141，Δ +0.0269，p=0.026）；MCC@val **0.3417 ± 0.0221**（基线 0.3580，Δ −0.0163，p=0.385）；F1@free 0.5999；ECE **0.1211**、Brier **0.2193**（基线 0.1167/0.2171）。
+- **结论**：与固定 `cv5_ema_fix`（0.7294/0.6515）几乎相同；AUROC/AUPR 无显著增益，MCC@0.5 的提高来自概率整体少右移（阈值效应），MCC@val 仍低于 `cv5`。渐进调度本身不带来额外收益，SAT 不能作为主创新；最多作为“阈值/校准”消融或负结果。
+- **产物**：`experiments/cv5_ema_ramp/{runs,results,manifest.json}`。
+
 ---
 
 ## 3. 待跑清单（跑完一个划一个）
@@ -96,7 +135,8 @@
 | 顺序 | exp | 命令 | 为什么 |
 |---|---|---|---|
 | — | `cv5_ema` / `cv5_mcc` / `cv5_full` | 历史实验 | 已完成；`cv5_ema` 用的是未修正的 EMA，`cv5_mcc`/`cv5_full` 含已移除的 MCC，均只能当历史对照 |
-| 2 | `cv5_ema_fix` | `--ema` | 修正首次命中、decay 0.9、warmup 1 后，EMA 是否还有增益（建议先单折） |
+| 2 | `cv5_ema_fix` | 旧接口固定 α=0.7（历史） | 已完成：AUROC 0.7294 / AUPR 0.6515，排序无显著增益 |
+| 2b | `cv5_ema_ramp` | `--ema --ema-alpha-min 0.7 --ema-start-epoch 2 --ema-tau 1.0 --ema-decay 0.65` | 已完成：AUROC 0.7293 / AUPR 0.6516，与固定 α=0.7 相同；不改善排序 |
 | 3 | `noise10` / `noise10_ema` | `--label-noise 0.10`（±`--ema`） | EMA 是否真的抗噪（判定规则见 DECISIONS.md） |
 | 4 | `legacy` | `run_legacy.py --exp legacy` | 与外部基线的公平对照线（4,224/462） |
 | 5 | `cv5_cluster` | 换聚类划分 | 回应 R1-4 的序列相似性泄漏（尚未实现） |

@@ -3,39 +3,45 @@
 """
 EMA-SAT（自自适应训练）的教师目标。
 
-原始定义（旧代码 EMA_SATManager）
---------------------------------
-    ema_i  ← decay · ema_i + (1 − decay) · p_i        # 逐样本概率的滑动平均
-    soft_i = alpha · y_i + (1 − alpha) · ema_i        # 教师标签
-默认 decay = 0.9、alpha = 0.7 —— 注意 **alpha=0.7 意味着 70% 仍是硬标签**，
-只有 30% 来自历史预测，不要把"自蒸馏"想得太强。
+目标定义
+--------
+    q_i^(e) = ρ · q_i^(e−1) + (1−ρ) · p_i^(e)        # 逐样本历史预测
+    t_i^(e) = α_e · y_i + (1 − α_e) · q_i^(e−1)      # 教师标签
 
-这里的实现要点
---------------
+α_e 是**硬标签权重**，不是教师权重。它从 1 开始，在 start_epoch
+之后快速下降并渐近逼近 α_min（默认 0.7）；等价地，教师权重
+β_e = 1 − α_e 从 0 快速上升并渐近逼近 0.3。这里采用指数饱和：
+
+    α_e = α_min + (1 − α_min) · exp(−(e − start_epoch + 1) / τ)
+
+例如 α_min=0.7、start_epoch=2、τ=1.0 时：
+    e=2: α=0.810, e=3: 0.741, e=4: 0.715, e=5: 0.706, ... → 0.700
+    β:   0.190,      0.259,      0.285,      0.294,     ... → 0.300
+
+注意：α_min=0.7 表示最终 70% 的目标来自硬标签、30% 来自教师；
+不要把它误设成教师权重 0.7。若想要更强的教师，可显式降低
+`--ema-alpha-min`（例如 0.5 表示教师上限 0.5）。
+
+实现要点
+--------
 * 缓冲区按**全局行号**索引（4,686 个），不是按 batch 内的位置。
-  否则同一肽在不同 fold 里会被当成不同样本，EMA 记忆全错。
-* 前 warmup_epochs 轮只用硬标签（EMA 尚未收敛，掺进去是噪声）。
-* 完全可关闭：enabled=False 时 targets() 原样返回硬标签，等价于普通训练。
-
-用法
-----
-    sat = EMASAT(n_samples, alpha=0.7, decay=0.9, warmup_epochs=1, enabled=True)
-    sat.set_epoch(epoch)
-    soft = sat.targets(idx, y_batch)      # 每个 batch 前向之前
-    ... loss = BCE(logits, soft) ...
-    # 推荐在 epoch 末用 eval 模式对 train 全集预测一次，再统一更新：
-    sat.update(train_idx, probs_eval)
+* `start_epoch` 之前只用硬标签；`start_epoch-1` 这一轮末才初始化教师。
+* 完全可关闭：enabled=False 时 targets() 原样返回硬标签。
+* 推荐在 epoch 末用 eval 模式对 train 全集预测一次，再统一更新。
 """
+import math
+
 import numpy as np
 import torch
 
 
 class EMASAT:
-    def __init__(self, n_samples, alpha=0.7, decay=0.9, warmup_epochs=1,
-                 enabled=True, dtype=np.float32):
-        self.alpha = float(alpha) if enabled else 1.0
+    def __init__(self, n_samples, alpha_min=0.7, decay=0.65, start_epoch=2,
+                 tau=1.0, enabled=True, dtype=np.float32):
+        self.alpha_min = float(np.clip(alpha_min, 0.0, 1.0)) if enabled else 1.0
         self.decay = float(decay)
-        self.warmup_epochs = int(warmup_epochs) if enabled else 0
+        self.start_epoch = int(start_epoch) if enabled else 0
+        self.tau = max(float(tau), 1e-6)
         self.enabled = bool(enabled)
         self.n = int(n_samples)
         self.ema = np.full(self.n, 0.5, dtype=dtype)
@@ -48,8 +54,27 @@ class EMASAT:
 
     @property
     def active(self):
-        """当前是否真的在用 EMA（关闭或仍在 warmup 时返回 False）"""
-        return self.enabled and self.epoch >= self.warmup_epochs
+        """当前是否真的在用教师目标（关闭或仍在预热时返回 False）"""
+        return self.enabled and self.epoch >= self.start_epoch
+
+    def alpha_at(self, epoch=None):
+        """当前 epoch 的硬标签权重；从 1 指数下降到 alpha_min。"""
+        if not self.enabled:
+            return 1.0
+        e = self.epoch if epoch is None else int(epoch)
+        if e < self.start_epoch:
+            return 1.0
+        delta = e - self.start_epoch + 1
+        return self.alpha_min + (1.0 - self.alpha_min) * math.exp(-delta / self.tau)
+
+    def beta_at(self, epoch=None):
+        """当前 epoch 的教师权重；= 1 - alpha，渐近 1-alpha_min。"""
+        if not self.enabled:
+            return 0.0
+        e = self.epoch if epoch is None else int(epoch)
+        if e < self.start_epoch:
+            return 0.0
+        return 1.0 - self.alpha_at(e)
 
     def reset(self):
         self.ema[:] = 0.5
@@ -71,7 +96,8 @@ class EMASAT:
             return torch.as_tensor(y, dtype=torch.float32)
 
         i = np.asarray(idx, dtype=np.int64)
-        soft = self.alpha * y + (1.0 - self.alpha) * self.ema[i]
+        alpha = self.alpha_at()
+        soft = alpha * y + (1.0 - alpha) * self.ema[i]
         # 没见过的样本（理论上不会发生，除非新数据）保持硬标签
         soft = np.where(self.seen[i], soft, y)
         return torch.as_tensor(soft.astype(np.float32), dtype=torch.float32)
@@ -79,6 +105,9 @@ class EMASAT:
     # ------------------------------------------------------------ 更新（推荐 epoch 末）
     def update(self, idx, probs):
         if not self.enabled:
+            return
+        # start_epoch-1 这一轮末才初始化教师；更早的轮次不写。
+        if self.epoch < self.start_epoch - 1:
             return
         i = np.asarray(idx, dtype=np.int64)
         p = probs.detach().float().cpu().numpy() if isinstance(probs, torch.Tensor) \
@@ -97,7 +126,10 @@ class EMASAT:
     def stats(self):
         m = self.seen
         if not m.any():
-            return {'ema_mean': 0.0, 'ema_std': 0.0, 'seen': 0}
+            return {'ema_mean': 0.0, 'ema_std': 0.0, 'seen': 0,
+                    'alpha': self.alpha_at(), 'beta': self.beta_at()}
         return {'ema_mean': float(self.ema[m].mean()),
                 'ema_std': float(self.ema[m].std()),
-                'seen': int(m.sum())}
+                'seen': int(m.sum()),
+                'alpha': self.alpha_at(),
+                'beta': self.beta_at()}

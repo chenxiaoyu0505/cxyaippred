@@ -1,3 +1,7 @@
-﻿exp,created,status,note,ema,ema_alpha,mcc_adaptive,epochs,folds,seeds,n_runs,auroc,aupr,mcc_val,path
-cv5,2026-11-09 17:52:35,finished,5折基线,0,,0,50,5,1,5,0.7277±0.0130,0.6494±0.0103,0.3580±0.0259,experiments/cv5
-cv5_full,2026-11-09 19:03:49,finished,5折+EMA+MCC,1,0.7,1,50,5,1,5,0.7316±0.0060,0.6525±0.0049,0.3517±0.0219,experiments/cv5_full
+﻿exp,created,status,note,ema,ema_alpha_min,ema_decay,ema_start_epoch,ema_tau,epochs,folds,seeds,n_runs,auroc,aupr,mcc_val,path
+cv5,2026-11-09 17:52:35,finished,5折基线,0,,,,,50,5,1,5,0.7277±0.0130,0.6494±0.0103,0.3580±0.0259,experiments/cv5
+cv5_full,2026-11-09 19:03:49,finished,5折+EMA+MCC,1,,,,,50,5,1,5,0.7316±0.0060,0.6525±0.0049,0.3517±0.0219,experiments/cv5_full
+cv5_ema,2026-11-09 20:14:15,finished,5折+EMA-SAT,1,,,,,50,5,1,5,0.7280±0.0091,0.6513±0.0224,0.3583±0.0388,experiments/cv5_ema
+cv5_mcc,2026-11-09 20:41:16,finished,5折+MCC自适应,0,,,,,50,5,1,5,0.7208±0.0104,0.6421±0.0175,0.3252±0.0290,experiments/cv5_mcc
+cv5_ema_fix,2026-11-10 09:40:34,finished,修正版EMA,1,,,,,50,5,1,5,0.7294±0.0100,0.6515±0.0104,0.3267±0.0057,experiments/cv5_ema_fix
+cv5_ema_ramp,2026-11-10 12:00:00,finished,渐进SAT(alpha0.7),1,0.7,0.65,2,1.0,50,5,1,5,0.7293±0.0147,0.6516±0.0142,0.3417±0.0221,experiments/cv5_ema_ramp

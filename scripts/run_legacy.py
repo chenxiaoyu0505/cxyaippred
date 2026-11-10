@@ -122,9 +122,10 @@ def main():
     ap.add_argument('--patience', type=int, default=10)
     ap.add_argument('--pos-weight', type=float, default=0.0)
     ap.add_argument('--ema', action='store_true')
-    ap.add_argument('--ema-alpha', type=float, default=0.7)
-    ap.add_argument('--ema-decay', type=float, default=0.9)
-    ap.add_argument('--ema-warmup', type=int, default=1)
+    ap.add_argument('--ema-alpha-min', type=float, default=0.7)
+    ap.add_argument('--ema-decay', type=float, default=0.65)
+    ap.add_argument('--ema-start-epoch', type=int, default=2)
+    ap.add_argument('--ema-tau', type=float, default=1.0)
     ap.add_argument('--device', default='')
     ap.add_argument('--force-split', action='store_true', help='重建 legacy 划分')
     ap.add_argument('--keep-cache', action='store_true')
@@ -160,8 +161,8 @@ def main():
            '--epochs', str(args.epochs), '--batch-size', str(args.batch_size),
            '--lr', str(args.lr), '--patience', str(args.patience),
            '--pos-weight', str(args.pos_weight),
-           '--ema-alpha', str(args.ema_alpha), '--ema-decay', str(args.ema_decay),
-           '--ema-warmup', str(args.ema_warmup)]
+           '--ema-alpha-min', str(args.ema_alpha_min), '--ema-decay', str(args.ema_decay),
+           '--ema-start-epoch', str(args.ema_start_epoch), '--ema-tau', str(args.ema_tau)]
     if args.ema:
         cmd.append('--ema')
     if args.device:

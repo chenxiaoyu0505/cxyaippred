@@ -55,11 +55,17 @@ class DataCfg:
 
 @dataclass
 class EMACfg:
-    """EMA-SAT：教师目标 = α·硬标签 + (1−α)·历史概率 EMA"""
+    """EMA-SAT：教师目标 = α_e·硬标签 + (1−α_e)·历史概率 EMA
+
+    α_e = alpha_min + (1−alpha_min)·exp(−(e − start_epoch + 1) / tau).
+    α 是硬标签权重，不是教师权重；alpha_min=0.7 表示最终 70% 来自
+    硬标签、30% 来自教师（β_max=0.3）。
+    """
     enabled: bool = False
-    alpha: float = 0.7        # 硬标签占比；α=1.0 等价于纯硬标签
-    decay: float = 0.9        # 逐样本概率的滑动平均系数；0.99 在 15–20 epoch 内近似不动
-    warmup_epochs: int = 1    # 前几个 epoch 只用硬标签
+    alpha_min: float = 0.7    # 硬标签权重下限；等价教师权重上限 0.3
+    decay: float = 0.65       # 教师状态 q 的滑动平均系数
+    start_epoch: int = 2      # 从该 epoch 起使用教师；上一轮末初始化 q
+    tau: float = 1.0          # 指数饱和时间常数；越小下降越快
 
 
 @dataclass
@@ -137,8 +143,9 @@ class RunCfg:
 
     def diff(self):
         """给人看的开关摘要，写进日志首行"""
-        return ('fold=%d seed=%d ema=%s alpha=%.2f pos_weight=%.2f '
-                'epochs=%d bs=%d lr=%g'
+        return ('fold=%d seed=%d ema=%s alpha_min=%.2f start=%d tau=%.2f '
+                'pos_weight=%.2f epochs=%d bs=%d lr=%g'
                 % (self.fold, self.train.seed,
-                   self.ema.enabled, self.ema.alpha, self.train.pos_weight,
+                   self.ema.enabled, self.ema.alpha_min,
+                   self.ema.start_epoch, self.ema.tau, self.train.pos_weight,
                    self.train.epochs, self.train.batch_size, self.train.lr))

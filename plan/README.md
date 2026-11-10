@@ -155,7 +155,8 @@ experiments\<exp>\
 - [x] **`cv5` 5 折基线**（2026-11-09 17:52 完成）：AUROC 0.7277 ± 0.0130 / AUPR 0.6494 ± 0.0103 / MCC@val 0.3580 ± 0.0259；结果在 `experiments/cv5/results/`，详见 `plan/RUNS.md`
 - [x] **`cv5_full` 5 折（EMA+MCC）**（2026-11-09 19:03 完成）：AUROC 0.7316 ± 0.0060 / AUPR 0.6525 ± 0.0049；但 MCC@0.5 降至 0.2505、ECE 升至 0.182
 - [x] **EMA / MCC 单独拆分**（2026-11-09 20:14 / 20:41）：`cv5_ema` AUROC 0.7280 / AUPR 0.6513，`cv5_mcc` AUROC 0.7208 / AUPR 0.6421；两者都没有显著增益，MCC 已移除
-- [ ] **修正版 EMA**（首次命中、decay 0.9、warmup 1、epoch 末更新）待跑 `cv5_ema_fix`
+- [x] **修正版 EMA**（首次命中、decay 0.9、warmup 1、epoch 末更新）已完成 `cv5_ema_fix`：AUROC 0.7294 ± 0.0100 / AUPR 0.6515 ± 0.0104，排序指标仍无显著增益
+- [x] **非线性指数饱和 SAT**（α_min 0.7、start 2、tau 1.0、decay 0.65）：`cv5_ema_ramp` 完成，AUROC 0.7293 / AUPR 0.6516，与固定 α=0.7 相同；不改善排序
 
 ### 没做
 
@@ -175,16 +176,16 @@ set PY=D:\anaconda3\envs\esm2_env\python.exe
 :: 主实验：5 折 × 1 seed，用完自动删 ESM 缓存
 %PY% scripts\run_5fold.py --exp cv5 --epochs 50
 
-:: EMA-SAT（默认关闭，显式 --ema 才开；decay 0.9 / warmup 1）
-%PY% scripts\run_5fold.py --exp cv5_ema_fix --ema --epochs 50
+:: EMA-SAT（默认关闭，显式 --ema 才开；硬标签 α→0.7 / start 2 / tau 1.0）
+%PY% scripts\run_5fold.py --exp cv5_ema_ramp --ema --ema-alpha-min 0.7 --ema-start-epoch 2 --ema-tau 1.0 --epochs 50
 
 :: 与原 462 条测试集并表的对照线
 %PY% scripts\run_legacy.py --exp legacy
 ```
 
 **EMA-SAT 默认关闭**，必须显式 `--ema` 才开；MCC 自适应类权重已于 2026-11-10 移除。
-EMA 会在 `train_log.csv` 留下逐 epoch 证据（`ema_active`、`ema_mean`、`ema_std`、
-`soft_pos_mean`、`soft_neg_mean`），可直接检查 teacher 是否还卡在 0.5 附近。
+EMA 会在 `train_log.csv` 留下逐 epoch 证据（`ema_active`、`ema_alpha`、`ema_beta`、`ema_mean`、`ema_std`、
+`soft_pos_mean`、`soft_neg_mean`），可直接检查 teacher 是否还卡在 0.5 附近、α 是否按计划下降、β 是否上升。
 
 单折手跑（调试用）：
 
@@ -212,7 +213,8 @@ EMA 会在 `train_log.csv` 留下逐 epoch 证据（`ema_active`、`ema_mean`、
 | 名字 | 含义 |
 |---|---|
 | `cv5` | 5 折主实验，什么都不开 |
-| `cv5_ema_fix` | EMA-SAT 修正版（`--ema`，decay 0.9 / warmup 1） |
+| `cv5_ema_fix` | EMA-SAT 修正版（固定 α=0.7/教师 β=0.3，历史对照） |
+| `cv5_ema_ramp` | EMA-SAT 指数饱和版（α_min 0.7 / start 2 / tau 1.0） |
 | `cv5_ema` | 旧 EMA 实现的历史对照，不再新跑 |
 | `legacy` | 原 4,224/462 划分，和外部基线并表用 |
 | `dbg0` / `smoke*` | 调试，看完就删 |

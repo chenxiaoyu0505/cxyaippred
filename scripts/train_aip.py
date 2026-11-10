@@ -120,9 +120,14 @@ def main():
     ap.add_argument('--label-noise', type=float, default=0.0,
                     help='标签噪声注入比例（只翻训练行，对称翻转；默认 0=不动）')
     ap.add_argument('--ema', action='store_true', help='启用 EMA-SAT')
-    ap.add_argument('--ema-alpha', type=float, default=0.7)
-    ap.add_argument('--ema-decay', type=float, default=0.9)
-    ap.add_argument('--ema-warmup', type=int, default=1)
+    ap.add_argument('--ema-alpha-min', type=float, default=0.7,
+                    help='硬标签权重下限 α_min；α→0.7 即教师权重上限 0.3')
+    ap.add_argument('--ema-decay', type=float, default=0.65,
+                    help='教师状态 q 的滑动平均系数')
+    ap.add_argument('--ema-start-epoch', type=int, default=2,
+                    help='从该 epoch 起使用教师；上一轮末初始化 q')
+    ap.add_argument('--ema-tau', type=float, default=1.0,
+                    help='α 指数饱和时间常数；越小下降越快')
     ap.add_argument('--device', default='auto',
                     help='auto/cuda/mps/cpu，默认自动选择')
     ap.add_argument('--run-name', default='', help='默认 fold{k}_{split_id}_m{seed}')
@@ -146,9 +151,10 @@ def main():
     cfg.train.label_noise = args.label_noise
     cfg.train.device = args.device
     cfg.ema.enabled = args.ema
-    cfg.ema.alpha = args.ema_alpha
+    cfg.ema.alpha_min = args.ema_alpha_min
     cfg.ema.decay = args.ema_decay
-    cfg.ema.warmup_epochs = args.ema_warmup
+    cfg.ema.start_epoch = args.ema_start_epoch
+    cfg.ema.tau = args.ema_tau
 
     run_name = args.run_name or cfg.run_name()
     if args.out:
@@ -212,8 +218,9 @@ def main():
                    cnn_drop=cfg.model.cnn_drop, mlp_drop=cfg.model.mlp_drop).to(device)
     opt = torch.optim.Adam(head.parameters(), lr=cfg.train.lr,
                            weight_decay=cfg.train.weight_decay)
-    sat = EMASAT(n, alpha=cfg.ema.alpha, decay=cfg.ema.decay,
-                 warmup_epochs=cfg.ema.warmup_epochs, enabled=cfg.ema.enabled)
+    sat = EMASAT(n, alpha_min=cfg.ema.alpha_min, decay=cfg.ema.decay,
+                 start_epoch=cfg.ema.start_epoch, tau=cfg.ema.tau,
+                 enabled=cfg.ema.enabled)
     pos_weight = torch.tensor([cfg.train.pos_weight], device=device) \
         if cfg.train.pos_weight > 0 else None
 
@@ -241,11 +248,14 @@ def main():
         row = {'epoch': epoch, 'train_loss': loss, 'val_aupr': val_aupr,
                'val_auroc': val_auc, 'ema_mean': st['ema_mean'],
                'ema_std': st['ema_std'], 'ema_seen': st['seen'],
-               'ema_active': int(sat.active), 'seconds': round(time.time() - t0, 1)}
+               'ema_alpha': st['alpha'], 'ema_beta': st['beta'],
+               'ema_active': int(sat.active),
+               'seconds': round(time.time() - t0, 1)}
 
         if cfg.ema.enabled:
             seen = sat.seen
-            soft = cfg.ema.alpha * y_fit + (1.0 - cfg.ema.alpha) * sat.ema
+            alpha = st['alpha']
+            soft = alpha * y_fit + (1.0 - alpha) * sat.ema
             pos = seen & (y_fit > 0.5)
             neg = seen & (y_fit <= 0.5)
             row['soft_pos_mean'] = float(soft[pos].mean()) if pos.any() else 0.0
@@ -253,8 +263,9 @@ def main():
 
         log_rows.append(row)
         if not args.quiet:
-            print('  ep%02d loss %.4f | val AUPR %.4f AUROC %.4f | ema %.3f±%.3f%s'
+            print('  ep%02d loss %.4f | val AUPR %.4f AUROC %.4f | ema %.3f±%.3f α %.2f β %.2f%s'
                   % (epoch, loss, val_aupr, val_auc, st['ema_mean'], st['ema_std'],
+                     st['alpha'], st['beta'],
                      '' if sat.active else ' (warmup)'), end='\r')
 
         if val_aupr > best_aupr:

@@ -20,7 +20,7 @@
 用法
 ----
     python scripts/run_5fold.py --exp cv5             # seed 0, 5 折
-    python scripts/run_5fold.py --exp cv5_ema --ema  # EMA 消融
+    python scripts/run_5fold.py --exp cv5_ema_ramp --ema  # 指数饱和 EMA 消融
     python scripts/run_5fold.py --seeds 0,1,2        # 3 个 model seed
     python scripts/run_5fold.py --skip-existing      # 断了接着跑
     python scripts/run_5fold.py --keep-cache         # 保留 ESM 缓存
@@ -57,7 +57,8 @@ def _update_index(args, folds, seeds, exp_dir):
     import json as _json
 
     idx_path = os.path.join(ROOT, 'experiments', '_index.csv')
-    cols = ['exp', 'created', 'status', 'note', 'ema', 'ema_alpha',
+    cols = ['exp', 'created', 'status', 'note', 'ema', 'ema_alpha_min',
+            'ema_decay', 'ema_start_epoch', 'ema_tau',
             'epochs', 'folds', 'seeds', 'n_runs',
             'auroc', 'aupr', 'mcc_val', 'path']
 
@@ -67,7 +68,10 @@ def _update_index(args, folds, seeds, exp_dir):
         'status': 'finished',
         'note': args.note,
         'ema': int(bool(args.ema)),
-        'ema_alpha': args.ema_alpha if args.ema else '',
+        'ema_alpha_min': args.ema_alpha_min if args.ema else '',
+        'ema_decay': args.ema_decay if args.ema else '',
+        'ema_start_epoch': args.ema_start_epoch if args.ema else '',
+        'ema_tau': args.ema_tau if args.ema else '',
         'epochs': args.epochs,
         'folds': '%d' % len(folds),
         'seeds': '%d' % len(seeds),
@@ -113,7 +117,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--exp', required=True,
                     help='实验名（必填，决定产物目录 experiments/<exp>/）。'
-                         '建议：cv5 / cv5_ema / legacy；'
+                         '建议：cv5 / cv5_ema_ramp / legacy；'
                          '只能用小写字母、数字、下划线和短横线')
     ap.add_argument('--note', default='', help='一句话说明这次为什么跑，写进 manifest 与总表')
     ap.add_argument('--resume', action='store_true',
@@ -128,9 +132,12 @@ def main():
     ap.add_argument('--pos-weight', type=float, default=0.0)
     ap.add_argument('--label-noise', type=float, default=0.0, help='标签噪声注入比例（只翻训练行）')
     ap.add_argument('--ema', action='store_true')
-    ap.add_argument('--ema-alpha', type=float, default=0.7)
-    ap.add_argument('--ema-decay', type=float, default=0.9)
-    ap.add_argument('--ema-warmup', type=int, default=1)
+    ap.add_argument('--ema-alpha-min', type=float, default=0.7,
+                    help='硬标签权重下限 α_min；α→0.7 即教师上限 0.3')
+    ap.add_argument('--ema-decay', type=float, default=0.65)
+    ap.add_argument('--ema-start-epoch', type=int, default=2)
+    ap.add_argument('--ema-tau', type=float, default=1.0,
+                    help='α 指数饱和时间常数；越小下降越快')
     ap.add_argument('--device', default='')
     ap.add_argument('--cache-dir', default='', help='ESM 缓存目录，默认 <root>/cache；'
                                                    '调试时可指向 _work\\fakecache')
@@ -173,8 +180,9 @@ def main():
     print('实验 %s | 折 %s | model seed %s | 共 %d 次训练'
           % (args.exp, folds, seeds, len(folds) * len(seeds)))
     print('EMA-SAT   : %s%s' % ('开' if args.ema else '关',
-                                ' (alpha=%.2f, decay=%.2f, warmup=%d)'
-                                % (args.ema_alpha, args.ema_decay, args.ema_warmup)
+                                ' (alpha_min=%.2f, start=%d, tau=%.2f, decay=%.2f)'
+                                % (args.ema_alpha_min, args.ema_start_epoch,
+                                   args.ema_tau, args.ema_decay)
                                 if args.ema else ''))
     print('超参      : epochs=%d batch=%d lr=%g patience=%d pos_weight=%g'
           % (args.epochs, args.batch_size, args.lr, args.patience, args.pos_weight))
@@ -221,9 +229,10 @@ def main():
                    '--lr', str(args.lr), '--patience', str(args.patience),
                    '--pos-weight', str(args.pos_weight),
                    '--label-noise', str(args.label_noise),
-                   '--ema-alpha', str(args.ema_alpha),
+                   '--ema-alpha-min', str(args.ema_alpha_min),
                    '--ema-decay', str(args.ema_decay),
-                   '--ema-warmup', str(args.ema_warmup),
+                   '--ema-start-epoch', str(args.ema_start_epoch),
+                   '--ema-tau', str(args.ema_tau),
                    '--cache-dir', cache_dir]
             if args.ema:
                 cmd.append('--ema')
@@ -259,8 +268,8 @@ def main():
             'settings': {'epochs': args.epochs, 'batch_size': args.batch_size,
                          'lr': args.lr, 'patience': args.patience,
                          'pos_weight': args.pos_weight, 'label_noise': args.label_noise, 'ema': args.ema,
-                         'ema_alpha': args.ema_alpha, 'ema_decay': args.ema_decay,
-                         'ema_warmup': args.ema_warmup},
+                         'ema_alpha_min': args.ema_alpha_min, 'ema_decay': args.ema_decay,
+                         'ema_start_epoch': args.ema_start_epoch, 'ema_tau': args.ema_tau},
             'note': args.note,
             'configs': [os.path.relpath(c, ROOT).replace('\\', '/') for c in cfgs],
             'seconds': round(time.time() - t_all, 1),

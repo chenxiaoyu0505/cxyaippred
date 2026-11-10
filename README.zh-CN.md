@@ -70,7 +70,7 @@ python scripts/run_5fold.py --exp cv5 --note "5 折基线"                  # 5 
 python scripts/run_5fold.py --exp cv5_ema_fix --ema                      # + EMA 自蒸馏
 
 python scripts/list_exps.py                                   # 所有实验，一行一个
-python scripts/list_exps.py --exp cv5_ema                     # 单个实验的逐折明细
+python scripts/list_exps.py --exp cv5_ema_fix                 # 单个实验的逐折明细
 ```
 
 调试用的单折训练与评估：
@@ -91,10 +91,14 @@ python scripts/predict.py --runs-dir experiments/cv5/runs --fasta peptides.fasta
 | 参数 | 含义 |
 |---|---|
 | `--exp NAME` | 实验名，必填，仅 `a-z0-9_-`，重名拒绝 |
-| `--ema` | 开启 EMA 自蒸馏（`--ema-alpha`、`--ema-decay` 默认 0.9、`--ema-warmup` 默认 1） |
+| `--ema` | 开启 EMA 自蒸馏（`--ema-alpha-min` 默认 0.7、`--ema-start-epoch` 2、`--ema-tau` 1.0、`--ema-decay` 0.65） |
 | `--label-noise 0.1` | 翻转 10% 的**训练**标签（逐条记录在 `label_noise.json`），用于检验抗噪性 |
 | `--device auto` | `auto` → CUDA → MPS → CPU |
 | `--seeds 0,1,2` | 模型种子（默认 `0`） |
+
+`--ema-alpha-min` 是**硬标签权重下限**，不是教师权重：0.7 表示最终 70% 目标来自硬标签、
+30% 来自教师。权重按 `α_e = α_min + (1 − α_min)·exp(−(e − start + 1)/τ)` 指数下降，
+前几轮快速接近 0.7，之后缓慢渐近；教师权重 `β_e = 1 − α_e` 渐近 0.3。
 
 ---
 
