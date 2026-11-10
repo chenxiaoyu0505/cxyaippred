@@ -271,7 +271,7 @@ BIP 数据混入后忘记删除的阳性，共 56 条、全部 label=1。证据�
 但污染方向是「抬高指标」，必须修。
 
 **决定**：
-1. 清单落盘 `data/contaminants_bip.csv`，原文件备份 `data/archive/v1_bip56/`，
+1. 清单落盘 `data/contaminants_bip.csv`，原文件备份 `_work/archive_pre4190/v1_bip56/`，
    主表重写为 train 4,178 / test 452 / all 4,630（阳 1,784 / 阴 2,846）。
 2. 划分不重抽：新 `split_seed42_n5_clean` = 旧 `split_seed42_n5` 删掉这 56 条，
    **其余样本的折位保持不变**，这样 `cv5_peptidebn_clean` 与 `cv5_peptidebn` 可以直接同折位对照，
@@ -289,7 +289,7 @@ BIP 数据混入后忘记删除的阳性，共 56 条、全部 label=1。证据�
 （41 条我们=1/BertAIP=0，11 条我们=0/BertAIP=1）；这 52 条在 BertAIP 内部没有自相矛盾。
 
 **决定**（用户 2026-11-10 拍板"其他52条也重新标"）：以 BertAIP 的标注为准改写这 52 条。
-明细 `data/relabel_bertaip_52.csv`，改前快照 `data/archive/v2_before_relabel/`。
+明细 `data/relabel_bertaip_52.csv`，改前快照 `_work/archive_pre4190/v2_before_relabel/`。
 
 **结果**：4,630 条不变，阳性 1,784 → 1,754，阴性 2,846 → 2,876（train 1,572/2,606，
 test 182/270）。划分折位不受影响（只改 label），`split_seed42_n5_clean` 的 `folds.csv` 已同步。
@@ -319,12 +319,15 @@ test 182/270）。划分折位不受影响（只改 label），`split_seed42_n5_
 
 1. 主表 `data/aip_all.csv` = **4,190 条交集**，用我们的清洗标签（阳 1,635 / 39.0%）。
    敏感性副本 `data/aip_all_hdlabels.csv`（同序列、用他们标签，阳 1,674），两版差 43 条。
-2. `aip_train.csv` / `aip_test.csv` **退役**（移入 `data/archive/v3_pre4190/`），只用单表 + folds。
+2. `aip_train.csv` / `aip_test.csv` **退役**（移入 `_work/archive_pre4190/v3_pre4190/`），只用单表 + folds。
 3. 划分**重抽**：`make_5fold.py --data data/aip_all.csv --force` → `split_seed42_n5`
    （train 2,681 / val 671 / test 838 每折）。不再沿用"保持折位"的做法——行集变了，旧折位无意义。
 4. ESM 缓存按新主表重建（单层 289.6 MB + 三层 869 MB，各约 2 分钟）；`hand_feats*.npy` 删除后按需重建。
 5. **4,686 与 4,630 口径下的全部实验数字作废**，`experiments/` 下旧目录只作历史留存，不得与新版混比。
-6. 对外报数必须同时给两个口径：全集 + 固定 15 肽子集（见 D-12）；与 HD-AIP 对比时必须用
+6. 旧数据快照不再放在 `data/` 下：`data/archive/` 整体移到 `_work/archive_pre4190/`
+   （`_work/` 已被 gitignore），`experiments/` 里基于 4,686 的旧实验目录移到
+   `_work/stale_experiments/`（约 2.1 GB，可随时删）。仓库里只保留 4,190 口径。
+7. 对外报数必须同时给两个口径：全集 + 固定 15 肽子集（见 D-12）；与 HD-AIP 对比时必须用
    `scripts/eval_subset.py --overlap data/HD-AIP_benchmark_4194.csv` 并注明标签来源。
 
 **风险记账**：4,190 条里 43 条标签与 HD-AIP 相反，AUPR 差 0.0167（同一组预测、只换标签），

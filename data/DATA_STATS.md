@@ -66,7 +66,7 @@ test 行 452–461 共 10 条），来自 BIP 数据混入、当时忘记删除�
 - 模型对其平均给 0.70 概率（其他阳性 0.50），属"容易正例"，会抬高指标。
 
 **处理**：清单登记于 `data/contaminants_bip.csv`（sequence/label/source_file/row），
-原文件备份于 `data/archive/v1_bip56/`，三条主表已重写。新划分 `split_seed42_n5_clean`
+原文件备份于 `_work/archive_pre4190/v1_bip56/`，三条主表已重写。新划分 `split_seed42_n5_clean`
 ＝ 旧 `split_seed42_n5` 去掉这 56 条、**其余折位不变**，用于和旧结果做同折位对照。
 
 | 文件 | 行数 | 阳性 / 阴性 | 阳性率 | 长度中位 / 95 分位 / 最大 |
@@ -82,7 +82,7 @@ test 行 452–461 共 10 条），来自 BIP 数据混入、当时忘记删除�
 去掉 56 条污染后，与 BertAIP（HD-AIP 的数据来源）逐条比对，仍有 **52 条标签相反**：
 41 条我们标 1 / BertAIP 标 0，11 条我们标 0 / BertAIP 标 1（BertAIP 内部这 52 条无自相矛盾）。
 按用户 2026-11-10 的决定，**以 BertAIP 为准重标**，明细见 `data/relabel_bertaip_52.csv`，
-重标前快照在 `data/archive/v2_before_relabel/`。
+重标前快照在 `_work/archive_pre4190/v2_before_relabel/`。
 
 | 文件 | 行数 | 阳性 / 阴性 | 阳性率 |
 |---|---|---|---|
@@ -109,7 +109,7 @@ test 行 452–461 共 10 条），来自 BIP 数据混入、当时忘记删除�
 
 - 与对方差异：仅我们 440 条（119 正 / 321 负）、仅对方 4 条（全正例）。
 - 两份标签相差 **43 条**（对方标 1、我们标 0），同一组预测换标签会让 AUPR 动 0.0167。
-- `aip_train.csv` / `aip_test.csv` 已退役，快照在 `data/archive/v3_pre4190/`；
-  旧的 `split_seed42_n5_clean` 移入 `data/archive/v4_pre4190_derived_split_clean/`。
+- `aip_train.csv` / `aip_test.csv` 已退役，快照在 `_work/archive_pre4190/v3_pre4190/`；
+  旧的 `split_seed42_n5_clean` 移入 `_work/archive_pre4190/v4_pre4190_derived_split_clean/`。
 - 划分重抽：`split_seed42_n5`（train 2,681 / val 671 / test 838 每折），见 `FOLDS.md`。
 - 4,686 与 4,630 口径下的所有实验数字**作废**。
