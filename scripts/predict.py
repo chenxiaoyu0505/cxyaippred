@@ -35,6 +35,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 from src.checkpoint import load_head            # noqa: E402
+from src.hand_select import apply_hand_selector, load_hand_selector  # noqa: E402
 from src.data_io import (apply_hand_scaler, load_hand_scaler,  # noqa: E402
                          seq_onehot)
 from src.esm_backbone import residue_mask       # noqa: E402
@@ -116,6 +117,11 @@ def main():
     if len(hand_dims) > 1:
         raise SystemExit('权重之间的 hand_dim 不一致：%s' % hand_dims)
     hand_dim = hand_dims.pop()
+    # 筛选后的头 hand_dim = 保留列数（≤80），原始特征仍是 704 —— 两者要分开
+    hand_raw_dims = {int(m.get('hand_raw_dim', hand_dim)) for m in metas}
+    if len(hand_raw_dims) > 1:
+        raise SystemExit('权重之间的 hand_raw_dim 不一致：%s' % hand_raw_dims)
+    hand_raw_dim = hand_raw_dims.pop()
     # 手工块是否追加了两亲性特征，必须由权重自己声明：算错维度比报错更危险
     hand_extras = {m.get('hand_extra', '') for m in metas}
     if len(hand_extras) > 1:
@@ -150,6 +156,18 @@ def main():
             raise SystemExit('%s 的维度 %d/%d ≠ hand_dim %d'
                              % (sp, len(mu), len(sd), hand_dim))
         scalers.append((mu, sd))
+    # 每折的筛选索引也各存一份（只在训练行上拟合），推理必须按同一组列取特征
+    selectors = []
+    for p, m, hd in zip(paths, metas, heads):
+        if m.get('hand_select', 'none') == 'none' or not getattr(hd, 'use_hand', True):
+            selectors.append(None)
+            continue
+        sp = os.path.join(os.path.dirname(os.path.abspath(p)), 'hand_selector.npz')
+        if not os.path.exists(sp):
+            raise SystemExit(
+                '权重 %s 声明 hand_select=%s，但同目录没有 hand_selector.npz。'
+                % (os.path.relpath(p, ROOT), m.get('hand_select')))
+        selectors.append(load_hand_selector(sp))
     n_scaled = sum(s is not None for s in scalers)
     print('手工特征标准化：%d/%d 个头使用本折训练集的 mean/std'
           % (n_scaled, len(heads)))
@@ -189,16 +207,23 @@ def main():
             elif hand_extra not in ('', None):
                 raise SystemExit('权重声明的 hand_extra=%r 不认识' % (hand_extra,))
             hand_np = np.stack(rows, axis=0).astype(np.float32)
-            if hand_np.shape[1] != hand_dim:
-                raise SystemExit('手工特征维度 %d 与权重要求的 %d 不一致（hand_extra=%r）'
-                                 % (hand_np.shape[1], hand_dim, hand_extra))
+            if hand_np.shape[1] != hand_raw_dim:
+                raise SystemExit('手工特征维度 %d 与权重要求的原始 %d 不一致（hand_extra=%r）'
+                                 % (hand_np.shape[1], hand_raw_dim, hand_extra))
             # CfC 要和 hidden_states 的 token 网格对齐：第 0 位是 <cls>，残基右移一位
             seq_t = None
             if any(getattr(hd, 'lnn', False) for hd in heads):
                 oh, _ = seq_onehot(chunk, lmax=h.shape[1], offset=1)
                 seq_t = torch.from_numpy(oh).to(args.device)
             for j, head in enumerate(heads):
-                hj = hand_np if scalers[j] is None else apply_hand_scaler(hand_np, *scalers[j])
+                hj = hand_np
+                if selectors[j] is not None:
+                    hj = apply_hand_selector(hj, selectors[j])
+                if scalers[j] is not None:
+                    hj = apply_hand_scaler(hj, *scalers[j])
+                if hj.shape[1] != hand_dim:
+                    raise SystemExit('筛选后手工特征 %d 维 ≠ 权重要求的 %d 维'
+                                     % (hj.shape[1], hand_dim))
                 hand = torch.from_numpy(hj).to(args.device)
                 probs[i:i + len(chunk), j] = torch.sigmoid(
                     head(h, mask, hand, seq_t)).cpu().numpy()

@@ -48,10 +48,14 @@ LEGACY_FORMATS = ('cxyaippred-aip-head-v1',)
 
 ARCH_KEYS = ('embed_dim', 'hand_dim', 'hidden', 'n_res', 'cnn_drop', 'mlp_drop',
              'norm', 'lnn', 'lnn_dim', 'use_esm', 'use_hand',
-             'esm_layers', 'esm_fuse')
+             'esm_layers', 'esm_fuse', 'fuse', 'fused_dim',
+             'proto_pos', 'proto_neg', 'proto_dim', 'proto_tau', 'proto_alpha')
 ARCH_DEFAULTS = {'norm': 'layer', 'lnn': False, 'lnn_dim': 128,
                  'use_esm': True, 'use_hand': True,
-                 'esm_layers': 1, 'esm_fuse': 'weighted'}
+                 'esm_layers': 1, 'esm_fuse': 'weighted',
+                 'fuse': 'early', 'fused_dim': 128,
+                 'proto_pos': 0, 'proto_neg': 0, 'proto_dim': 128,
+                 'proto_tau': 0.1, 'proto_alpha': 1.0}
 
 
 def save_head(head, path, meta):
@@ -59,7 +63,14 @@ def save_head(head, path, meta):
     meta.setdefault('esm_name', 'facebook/esm2_t33_650M_UR50D')
     meta.setdefault('esm_layer', -1)
     for k in ARCH_KEYS:
-        meta.setdefault(k, getattr(head, k))
+        meta.setdefault(k, getattr(head, k, ARCH_DEFAULTS.get(k)))
+    # 原型支路的形状存在子模块里，AIPHead 上没有同名属性
+    if getattr(head, 'proto_enabled', False):
+        meta['proto_pos'] = int(head.proto.n_pos)
+        meta['proto_neg'] = int(head.proto.n_neg)
+        meta['proto_dim'] = int(head.proto.proj_dim)
+        meta['proto_tau'] = float(head.proto.tau)
+        meta['proto_alpha'] = float(head.proto_alpha)
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     torch.save({'format': FORMAT, 'meta': meta, 'state': head.state_dict()}, path)
     return path

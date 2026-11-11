@@ -53,6 +53,15 @@ class ModelCfg:
     # 手工块追加项：'amphipath' = 694 + 10 维两亲性（704，**默认**）；
     #               '' = 只保留 694 维基础块（消融用，CLI 加 --no-amphipath）
     hand_extra: str = 'amphipath'
+    # 手工特征筛选：'none' = 全量 704 维（旧行为，默认）；'mi_rf' = 方差 + 相关性 +
+    # 互信息 + 随机森林选到 ≤80 维。只在**本折训练行**上拟合，索引落盘到
+    # hand_selector.npz；推理时必须用它复现（见 scripts/predict.py）。
+    hand_select: str = 'none'
+    # 融合方式：'early' = cat(ESM 池化, hand) 后进 MLP（旧行为，默认）；
+    #           'late'  = 两条支路各自投影到 fused_dim，再做
+    #                     [h_e, h_h, h_e*h_h, |h_e-h_h|] 的显式交互后进 MLP
+    fuse: str = 'early'
+    fused_dim: int = 128
     # ---- CfC（LNN）序列支路 ----
     # 直接把 one-hot 序列喂进闭式 CfC，池化后与 ESM/手工特征 concat。
     # 不加 router：静态权重会被下一层 Linear 吸收，等于没加。
@@ -70,6 +79,18 @@ class ModelCfg:
     esm_layers: int = 1
     # 缓存里实际存了哪几层，由 train 脚本从 esm_meta.json 填进来，写进权重供推理复现
     esm_layer_ids: str = ''
+    # ---- 原型旁路（prototype side-branch）----
+    # 与主分支吃同一份拼接特征，只做"小投影 → 每类 K 个原型 → 分数 B"，
+    # 最终分数 = A + alpha * B。proto_pos/proto_neg 都为 0 时完全关闭（默认）。
+    # 注意：它不引入新信息，作用是结构先验 + 可解释性，别指望它替代主分支提分。
+    proto_pos: int = 0        # 阳性原型数
+    proto_neg: int = 0        # 阴性原型数
+    proto_dim: int = 128      # 投影维度
+    proto_tau: float = 0.1    # cosine 温度
+    proto_alpha: float = 1.0  # B 的固定权重（先不做可学习，避免 alpha 与 B 尺度不可辨识）
+    proto_w_aux: float = 0.5  # 辅助损失 BCE(B) 的权重，防止 B 免费搭车
+    proto_w_div: float = 0.01 # 类内原型多样性正则权重
+    proto_init: str = 'kmeans'  # 'kmeans' = 用训练折特征聚类初始化；'random' = 随机
 
 
 @dataclass

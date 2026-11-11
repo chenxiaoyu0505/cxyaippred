@@ -45,6 +45,7 @@ from src.data_io import (apply_hand_scaler, esm_meta, fit_hand_scaler,  # noqa: 
                          hand_feats, iter_batches, load_esm_cache,
                          load_folds, load_table, save_hand_scaler, seq_onehot)
 from src.ema_sat import EMASAT                             # noqa: E402
+from src.hand_select import save_hand_selector, select_hand_features  # noqa: E402
 from src.manifest import sha256_file                       # noqa: E402
 from src.metrics import threshold_free                       # noqa: E402
 from src.model_aip import AIPHead                          # noqa: E402
@@ -71,6 +72,74 @@ def predict_ordered(head, idx, emb, mask, hand, device, batch_size=64, seq=None)
     return out
 
 
+def predict_components(head, idx, emb, mask, hand, device, batch_size=64, seq=None):
+    """分别返回主分支 A 与原型分支 B 的 sigmoid 概率（仅原型开启时有意义）。"""
+    head.eval()
+    pa = np.zeros(len(idx), dtype=np.float64)
+    pb = np.zeros(len(idx), dtype=np.float64)
+    with torch.no_grad():
+        for s in range(0, len(idx), batch_size):
+            b = idx[s:s + batch_size]
+            h = torch.from_numpy(np.asarray(emb[b], dtype=np.float32)).to(device)
+            m = torch.from_numpy(np.asarray(mask[b])).to(device).float()
+            hf = torch.from_numpy(hand[b]).to(device)
+            sq = None
+            if seq is not None:
+                sq = torch.from_numpy(np.asarray(seq[b], dtype=np.float32)).to(device)
+            _, aux = head(h, m, hf, sq, return_proto=True)
+            pa[s:s + len(b)] = torch.sigmoid(aux['A']).cpu().numpy()
+            pb[s:s + len(b)] = torch.sigmoid(aux['B']).cpu().numpy()
+    return pa, pb
+
+
+# ---------------------------------------------------------------- 原型初始化
+
+def init_prototypes(head, tr_idx, emb, mask, hand, y, cfg, device, seq=None):
+    """用本折训练行的拼接特征做类内 k-means，给原型一个贴近数据的起点。
+
+    只在本折训练行上聚类（不看 val/test），代价是一次额外前向。
+    """
+    if not head.proto_enabled or cfg.model.proto_init != 'kmeans':
+        return
+    from sklearn.cluster import KMeans
+
+    bs = max(cfg.train.batch_size, 64)
+    head.eval()
+    feats, labels = [], []
+    with torch.no_grad():
+        for s in range(0, len(tr_idx), bs):
+            b = tr_idx[s:s + bs]
+            h = torch.from_numpy(np.asarray(emb[b], dtype=np.float32)).to(device)
+            m = torch.from_numpy(np.asarray(mask[b])).to(device).float()
+            hf = torch.from_numpy(hand[b]).to(device)
+            sq = None
+            if seq is not None:
+                sq = torch.from_numpy(np.asarray(seq[b], dtype=np.float32)).to(device)
+            feats.append(head.encode(h, m, hf, sq).cpu().numpy())
+            labels.append(np.asarray(y[b]))
+    feats = np.concatenate(feats).astype(np.float64)
+    labels = np.concatenate(labels)
+
+    # 在**投影后的 128 维空间**聚类：原型就活在这里，直接拿 1984 维中心会形状对不上
+    with torch.no_grad():
+        z = []
+        for s in range(0, len(feats), 512):
+            ft = torch.from_numpy(feats[s:s + 512].astype(np.float32)).to(device)
+            z.append(head.proto.proj(ft).cpu().numpy())
+        z = np.concatenate(z).astype(np.float64)
+
+    with torch.no_grad():
+        for P, cls in ((head.proto.p_pos, 1), (head.proto.p_neg, 0)):
+            X = z[labels > 0.5] if cls else z[labels <= 0.5]
+            k = int(P.shape[0])
+            if len(X) < k:
+                continue
+            km = KMeans(n_clusters=k, n_init=10,
+                        random_state=cfg.train.seed).fit(X)
+            P.copy_(torch.from_numpy(km.cluster_centers_).to(P.dtype).to(P.device))
+    head.train()
+
+
 # ---------------------------------------------------------------- 训练一步
 
 def train_epoch(head, opt, sat, tr_idx, emb, mask, hand, y, cfg, device,
@@ -89,10 +158,20 @@ def train_epoch(head, opt, sat, tr_idx, emb, mask, hand, y, cfg, device,
         if seq is not None:
             sq = torch.from_numpy(np.asarray(seq[b], dtype=np.float32)).to(device)
 
-        logits = head(h, m, hf, sq)
         target = sat.targets(b, yb).to(device)
-        loss = F.binary_cross_entropy_with_logits(logits, target,
-                                                  pos_weight=pos_weight)
+        if head.proto_enabled:
+            logits, aux = head(h, m, hf, sq, return_proto=True)
+            loss = F.binary_cross_entropy_with_logits(logits, target,
+                                                      pos_weight=pos_weight)
+            # 辅助损失：逼 B 单独也具备判别力，否则主分支会把 alpha*B 一路压没
+            loss = loss + cfg.model.proto_w_aux * F.binary_cross_entropy_with_logits(
+                aux['B'], target, pos_weight=pos_weight)
+            if cfg.model.proto_w_div > 0:
+                loss = loss + cfg.model.proto_w_div * head.proto.diversity()
+        else:
+            logits = head(h, m, hf, sq)
+            loss = F.binary_cross_entropy_with_logits(logits, target,
+                                                      pos_weight=pos_weight)
 
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -126,6 +205,19 @@ def main():
     ap.add_argument('--patience', type=int, default=10)
     ap.add_argument('--monitor', default='', choices=['', 'auroc', 'aupr'],
                     help='早停 / 选最优 epoch 用的验证指标，默认 auroc（AUPR 仍照常记录）')
+    ap.add_argument('--proto-pos', type=int, default=0,
+                    help='阳性原型数；与 --proto-neg 都为 0 时关闭原型旁路（默认）')
+    ap.add_argument('--proto-neg', type=int, default=0, help='阴性原型数')
+    ap.add_argument('--proto-dim', type=int, default=128, help='原型支路的投影维度')
+    ap.add_argument('--proto-tau', type=float, default=0.1, help='cosine 温度')
+    ap.add_argument('--proto-alpha', type=float, default=1.0,
+                    help='最终分数 = A + alpha*B；先固定，避免 alpha 与 B 尺度不可辨识')
+    ap.add_argument('--proto-w-aux', type=float, default=0.5,
+                    help='辅助损失 BCE(B) 的权重；不加的话主分支会把 B 压没')
+    ap.add_argument('--proto-w-div', type=float, default=0.01,
+                    help='类内原型多样性正则权重（防塌缩）')
+    ap.add_argument('--proto-init', default='kmeans', choices=['kmeans', 'random'],
+                    help='kmeans = 用本折训练特征做类内聚类初始化（多一次前向）')
     ap.add_argument('--pos-weight', type=float, default=0.0)
     ap.add_argument('--label-noise', type=float, default=0.0,
                     help='标签噪声注入比例（只翻训练行，对称翻转；默认 0=不动）')
@@ -145,6 +237,14 @@ def main():
     ap.add_argument('--hand-norm', default='', choices=['', 'standard', 'none'],
                     help='手工特征标准化。默认 standard（每折只用训练行拟合 mean/std）；'
                          'none 为旧行为，694 维里基本只有 mw/charg 起作用')
+    ap.add_argument('--hand-select', default='', choices=['', 'none', 'mi_rf'],
+                    help='手工特征筛选：mi_rf = 方差 + 相关性 + 互信息 + 随机森林'
+                         '选到 ≤80 维，只用本折训练行拟合（索引写进 run 目录）')
+    ap.add_argument('--fuse', default='', choices=['', 'early', 'late'],
+                    help='融合方式：early = 拼原始特征（旧行为）；late = 两路各投影到 '
+                         'fused_dim 后做 [h_e,h_h,h_e*h_h,|h_e-h_h|] 交互')
+    ap.add_argument('--fused-dim', type=int, default=0,
+                    help='late 融合的投影维度（默认沿用配置里的 128）')
     ap.add_argument('--amphipath', action='store_true',
                     help='手工块追加 10 维两亲性特征（疏水矩 μH，滑窗 7/11、转角 100°）。'
                          '**这是默认行为**，本开关只为显式表达意图')
@@ -184,6 +284,14 @@ def main():
     cfg.train.patience = args.patience
     if args.monitor:
         cfg.train.monitor = args.monitor
+    cfg.model.proto_pos = args.proto_pos
+    cfg.model.proto_neg = args.proto_neg
+    cfg.model.proto_dim = args.proto_dim
+    cfg.model.proto_tau = args.proto_tau
+    cfg.model.proto_alpha = args.proto_alpha
+    cfg.model.proto_w_aux = args.proto_w_aux
+    cfg.model.proto_w_div = args.proto_w_div
+    cfg.model.proto_init = args.proto_init
     cfg.train.pos_weight = args.pos_weight
     cfg.train.label_noise = args.label_noise
     cfg.train.device = args.device
@@ -196,6 +304,12 @@ def main():
         cfg.model.norm = args.norm
     if args.hand_norm:
         cfg.model.hand_norm = args.hand_norm
+    if args.hand_select:
+        cfg.model.hand_select = args.hand_select
+    if args.fuse:
+        cfg.model.fuse = args.fuse
+    if args.fused_dim:
+        cfg.model.fused_dim = args.fused_dim
     if args.amphipath:
         cfg.model.hand_extra = 'amphipath'
     if args.no_amphipath:
@@ -236,9 +350,22 @@ def main():
     hand = hand_feats(table, cfg.data.cache_dir,
                       with_amphipath=(cfg.model.hand_extra == 'amphipath'))
     # 维度由数据决定：694（基础）或 704（+两亲性），写进 cfg 与 checkpoint
-    cfg.model.hand_dim = int(hand.shape[1])
-    if cfg.model.hand_extra == 'amphipath' and cfg.model.hand_dim != 704:
-        raise SystemExit('--amphipath 要求 hand_dim=704，实际 %d' % cfg.model.hand_dim)
+    hand_raw_dim = int(hand.shape[1])
+    if cfg.model.hand_extra == 'amphipath' and hand_raw_dim != 704:
+        raise SystemExit('--amphipath 要求 hand_dim=704，实际 %d' % hand_raw_dim)
+    cfg.model.hand_dim = hand_raw_dim
+    # 特征筛选只能在**本折训练行**上拟合；索引写进 run 目录，推理时要按它取列
+    h_idx = None
+    if cfg.model.use_hand and cfg.model.hand_select != 'none':
+        h_idx = select_hand_features(hand[folds['train']], y[folds['train']],
+                                     seed=cfg.train.seed)
+        hand = hand[:, h_idx]
+        cfg.model.hand_dim = int(hand.shape[1])
+        save_hand_selector(os.path.join(run_dir, 'hand_selector.npz'), h_idx)
+        print('[%s] 手工特征筛选：%d → %d 维（只用 %d 条训练行）'
+              % (run_name, hand_raw_dim, hand.shape[1], len(folds['train'])))
+    elif cfg.model.use_hand:
+        cfg.model.hand_dim = hand_raw_dim
     if not cfg.model.use_hand:
         h_mean = h_std = None
         print('[%s] 手工特征支路已关闭（--lnn-only），不做标准化' % run_name)
@@ -322,11 +449,22 @@ def main():
                    lnn_dt=cfg.model.lnn_dt,
                    use_esm=cfg.model.use_esm, use_hand=cfg.model.use_hand,
                    esm_layers=cfg.model.esm_layers,
-                   esm_fuse=cfg.model.esm_fuse).to(device)
+                   esm_fuse=cfg.model.esm_fuse,
+                   proto_pos=cfg.model.proto_pos, proto_neg=cfg.model.proto_neg,
+                   proto_dim=cfg.model.proto_dim, proto_tau=cfg.model.proto_tau,
+                   proto_alpha=cfg.model.proto_alpha,
+                   fuse=cfg.model.fuse, fused_dim=cfg.model.fused_dim).to(device)
     print('[%s] 模型 %.2fM 参数 / %.1f MB（lnn=%s esm=%s hand=%s feat=%d layers=%d/%s）'
           % (run_name, head.n_params() / 1e6, head.size_mb(), head.lnn,
              head.use_esm, head.use_hand, head.feat_dim,
              head.esm_layers, head.esm_fuse))
+    if head.proto_enabled:
+        init_prototypes(head, folds['train'], emb, mask, hand, y, cfg, device, seq=seq)
+        print('[%s] 原型旁路：%d 阳 + %d 阴，投影 %d，tau %.2f，alpha %.2f，'
+              'init=%s，w_aux %.2f，w_div %.3f'
+              % (run_name, cfg.model.proto_pos, cfg.model.proto_neg,
+                 cfg.model.proto_dim, cfg.model.proto_tau, cfg.model.proto_alpha,
+                 cfg.model.proto_init, cfg.model.proto_w_aux, cfg.model.proto_w_div))
     opt = torch.optim.Adam(head.parameters(), lr=cfg.train.lr,
                            weight_decay=cfg.train.weight_decay)
     sat = EMASAT(n, alpha_min=cfg.ema.alpha_min, decay=cfg.ema.decay,
@@ -397,6 +535,23 @@ def main():
           % (run_name, best_epoch, best_auc, best_aupr,
              cfg.train.monitor.upper(), time.time() - t0))
 
+    # ---- 原型旁路：把 A / B 分开落盘，方便判断"提升来自主分支还是原型" ----
+    if head.proto_enabled:
+        pa, pb = predict_components(head, np.arange(n), emb, mask, hand, device,
+                                    max(cfg.train.batch_size, 64), seq=seq)
+        pd.DataFrame({'row': np.arange(n), 'label': table['label'].values,
+                      'prob': pa}).to_csv(os.path.join(run_dir, 'probs_A.csv'), index=False)
+        pd.DataFrame({'row': np.arange(n), 'label': table['label'].values,
+                      'prob': pb}).to_csv(os.path.join(run_dir, 'probs_B.csv'), index=False)
+        np.savez(os.path.join(run_dir, 'prototypes.npz'),
+                 p_pos=head.proto.p_pos.detach().cpu().numpy(),
+                 p_neg=head.proto.p_neg.detach().cpu().numpy(),
+                 alpha=cfg.model.proto_alpha)
+        for name, p in (('A', pa), ('B', pb)):
+            m = threshold_free(y[folds['test']], p[folds['test']])
+            print('[%s] test 分量 %s：AUROC %.4f / AUPR %.4f'
+                  % (run_name, name, m['auroc'], m['aupr']))
+
     # ---- 落盘：概率 ----
     all_p = predict_ordered(head, np.arange(n), emb, mask, hand, device,
                             max(cfg.train.batch_size, 64), seq=seq)
@@ -432,10 +587,17 @@ def main():
         'split_id': cfg.data.split_id,
         'hand_norm': cfg.model.hand_norm,
         'hand_extra': cfg.model.hand_extra,
+        'hand_select': cfg.model.hand_select,
+        'hand_raw_dim': hand_raw_dim,
+        'fuse': cfg.model.fuse,
+        'fused_dim': cfg.model.fused_dim,
         'esm_layers': cfg.model.esm_layers,
         'esm_fuse': cfg.model.esm_fuse,
         'esm_layer_ids': cfg.model.esm_layer_ids,
         'lnn': cfg.model.lnn, 'lnn_dim': cfg.model.lnn_dim,
+        'proto_pos': cfg.model.proto_pos, 'proto_neg': cfg.model.proto_neg,
+        'proto_dim': cfg.model.proto_dim, 'proto_tau': cfg.model.proto_tau,
+        'proto_alpha': cfg.model.proto_alpha,
         'use_esm': cfg.model.use_esm, 'use_hand': cfg.model.use_hand,
         'train_data': os.path.basename(cfg.data.folds_csv),
         'note': 'single-task AIP head; metrics computed by eval_aip.py',

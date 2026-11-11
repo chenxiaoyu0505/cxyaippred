@@ -189,6 +189,22 @@ def main():
                          '默认不登记以免弄脏工作区；事后可用 scripts/register_exp.py 补登记）')
     ap.add_argument('--lnn-only', action='store_true',
                     help='探针：只训练 CfC 一条支路（关掉 ESM 与手工特征）')
+    # ---- 原型旁路（默认关闭）----
+    ap.add_argument('--hand-select', default='', choices=['', 'none', 'mi_rf'],
+                    help='手工特征筛选（mi_rf：方差+相关性+互信息+随机森林，≤80 维）')
+    ap.add_argument('--fuse', default='', choices=['', 'early', 'late'],
+                    help='融合方式：late = 两路各投影后做 [h_e,h_h,h_e*h_h,|h_e-h_h|]')
+    ap.add_argument('--fused-dim', type=int, default=0,
+                    help='late 融合的投影维度（0=沿用配置默认 128）')
+    ap.add_argument('--proto-pos', type=int, default=0, help='阳性原型数（0=关闭）')
+    ap.add_argument('--proto-neg', type=int, default=0, help='阴性原型数（0=关闭）')
+    ap.add_argument('--proto-dim', type=int, default=128, help='原型支路投影维度')
+    ap.add_argument('--proto-tau', type=float, default=0.1, help='cosine 温度')
+    ap.add_argument('--proto-alpha', type=float, default=1.0,
+                    help='最终分数 = A + alpha*B（固定值）')
+    ap.add_argument('--proto-w-aux', type=float, default=0.5, help='辅助损失 BCE(B) 权重')
+    ap.add_argument('--proto-w-div', type=float, default=0.01, help='原型多样性正则权重')
+    ap.add_argument('--proto-init', default='kmeans', choices=['kmeans', 'random'])
     args = ap.parse_args()
 
     # ---- 实验名校验与重复保护 ----
@@ -349,6 +365,21 @@ def main():
                         '--lnn-dt', str(args.lnn_dt)]
             if args.lnn_only:
                 cmd += ['--lnn-only']
+            if args.hand_select:
+                cmd += ['--hand-select', args.hand_select]
+            if args.fuse:
+                cmd += ['--fuse', args.fuse]
+            if args.fused_dim:
+                cmd += ['--fused-dim', str(args.fused_dim)]
+            if args.proto_pos or args.proto_neg:
+                cmd += ['--proto-pos', str(args.proto_pos),
+                        '--proto-neg', str(args.proto_neg),
+                        '--proto-dim', str(args.proto_dim),
+                        '--proto-tau', str(args.proto_tau),
+                        '--proto-alpha', str(args.proto_alpha),
+                        '--proto-w-aux', str(args.proto_w_aux),
+                        '--proto-w-div', str(args.proto_w_div),
+                        '--proto-init', args.proto_init]
             if args.device:
                 cmd += ['--device', args.device]
             if args.monitor:
@@ -382,6 +413,11 @@ def main():
             'skipped_runs': len(skipped),
             'settings': {'epochs': args.epochs, 'batch_size': args.batch_size,
                          'monitor': args.monitor or 'auroc',
+                         'hand_select': args.hand_select or 'none',
+                         'fuse': args.fuse or 'early',
+                         'fused_dim': args.fused_dim or 128,
+                         'proto_pos': args.proto_pos, 'proto_neg': args.proto_neg,
+                         'proto_dim': args.proto_dim, 'proto_tau': args.proto_tau,
                          'lr': args.lr, 'patience': args.patience,
                          'pos_weight': args.pos_weight, 'label_noise': args.label_noise, 'ema': args.ema,
                          'ema_alpha_min': args.ema_alpha_min, 'ema_decay': args.ema_decay,

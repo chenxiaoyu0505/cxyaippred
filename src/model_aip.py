@@ -40,6 +40,7 @@ padding 处理（2026-11 修正）
 """
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .cfc import CfCBlock
 
@@ -176,6 +177,50 @@ class ResBlock1D(nn.Module):
         return out * m if m is not None else out
 
 
+class ProtoBranch(nn.Module):
+    """阳性/阴性多原型旁路：拼接特征 → 小投影 → 每类 K 个原型 → 分数 B。
+
+    B = logsumexp(cos(z, P_pos)/τ) - logsumexp(cos(z, P_neg)/τ)
+
+    它和主分支吃同一份特征，因此**不引入新信息**；作用是把特征空间往
+    "类内多峰"的结构上推，并给出可按原型拆解的解释。α 固定为常量，
+    避免 α 与 B 的尺度不可辨识，也避免 α→0 让这条支路免费搭车。
+    """
+
+    def __init__(self, in_dim, n_pos=2, n_neg=2, proj_dim=128, tau=0.1):
+        super().__init__()
+        self.in_dim = int(in_dim)
+        self.n_pos = int(n_pos)
+        self.n_neg = int(n_neg)
+        self.proj_dim = int(proj_dim)
+        self.tau = float(tau)
+        if self.n_pos < 1 or self.n_neg < 1:
+            raise ValueError('ProtoBranch 要求每类至少 1 个原型')
+        self.proj = nn.Sequential(nn.Linear(in_dim, proj_dim),
+                                  nn.LayerNorm(proj_dim))
+        self.p_pos = nn.Parameter(torch.randn(n_pos, proj_dim) * 0.02)
+        self.p_neg = nn.Parameter(torch.randn(n_neg, proj_dim) * 0.02)
+
+    def forward(self, feat):
+        z = F.normalize(self.proj(feat), dim=1)
+        sp = z @ F.normalize(self.p_pos, dim=1).t() / self.tau   # [B, K_pos]
+        sn = z @ F.normalize(self.p_neg, dim=1).t() / self.tau   # [B, K_neg]
+        b = torch.logsumexp(sp, dim=1) - torch.logsumexp(sn, dim=1)
+        return b, sp, sn
+
+    def diversity(self):
+        """类内原型两两余弦的平方和；越接近 0，原型越分散（防塌缩）。"""
+        loss = 0.0
+        for P in (self.p_pos, self.p_neg):
+            if P.shape[0] < 2:
+                continue
+            pn = F.normalize(P, dim=1)
+            gram = pn @ pn.t()
+            off = gram - torch.diag_embed(torch.diagonal(gram))
+            loss = loss + (off ** 2).sum()
+        return loss
+
+
 class AIPHead(nn.Module):
     """ESM 表示 [+ CfC 序列支路] + 手工特征 → AIP 概率（不含 ESM 本体）
 
@@ -196,7 +241,9 @@ class AIPHead(nn.Module):
                  n_res=2, cnn_drop=0.2, mlp_drop=0.3, norm='peptide_bn',
                  lnn=False, lnn_dim=128, lnn_dt=1.0,
                  use_esm=True, use_hand=True,
-                 esm_layers=1, esm_fuse='weighted'):
+                 esm_layers=1, esm_fuse='weighted',
+                 proto_pos=0, proto_neg=0, proto_dim=128, proto_tau=0.1,
+                 proto_alpha=1.0, fuse='early', fused_dim=128):
         super().__init__()
         self.embed_dim = embed_dim
         self.hand_dim = hand_dim
@@ -237,6 +284,26 @@ class AIPHead(nn.Module):
         feat_dim = ((embed_dim if self.use_esm else 0)
                     + (hand_dim if self.use_hand else 0)
                     + (self.lnn_dim if self.lnn else 0))
+        # ---- 融合方式 ----
+        # 'early'：直接把各支路原始特征拼起来（旧行为，权重兼容）
+        # 'late' ：两条支路先各自投影到 fused_dim，再做显式交互
+        #          [h_e, h_h, h_e*h_h, |h_e-h_h|]。乘积项随样本变化，不会被
+        #          下一层 Linear 吸收；参数只多两个投影层。
+        self.fuse = str(fuse)
+        self.fused_dim = int(fused_dim)
+        if self.fuse not in ('early', 'late'):
+            raise ValueError('fuse 只支持 early/late，收到 %r' % (self.fuse,))
+        if self.fuse == 'late':
+            if not (self.use_esm and self.use_hand):
+                raise ValueError('fuse=late 需要 ESM 与手工两条支路同时启用'
+                                 '（当前 esm=%s hand=%s）' % (self.use_esm, self.use_hand))
+            if self.lnn:
+                raise ValueError('fuse=late 暂不支持 CfC 支路，请先关掉 --lnn')
+            self.esm_proj = nn.Sequential(
+                nn.Linear(embed_dim, self.fused_dim), nn.LayerNorm(self.fused_dim))
+            self.hand_proj = nn.Sequential(
+                nn.Linear(hand_dim, self.fused_dim), nn.LayerNorm(self.fused_dim))
+            feat_dim = 4 * self.fused_dim
         self.feat_dim = int(feat_dim)
         self.shared = nn.Sequential(
             nn.Linear(feat_dim, hidden), nn.ReLU(), nn.Dropout(mlp_drop)
@@ -244,6 +311,15 @@ class AIPHead(nn.Module):
         self.out = nn.Sequential(
             nn.Linear(hidden, hidden), nn.ReLU(), nn.Dropout(mlp_drop), nn.Linear(hidden, 1)
         )
+
+        # ---- 原型旁路（默认关闭）----
+        # 关键约定：它接在**拼接特征**上，和主分支同源，所以不会带来新信息。
+        # 训练时必须额外监督 B（train_aip 里的 proto_w_aux），否则主分支会把 B 压没。
+        self.proto_enabled = (int(proto_pos) + int(proto_neg)) > 0
+        self.proto_alpha = float(proto_alpha)
+        if self.proto_enabled:
+            self.proto = ProtoBranch(feat_dim, n_pos=proto_pos, n_neg=proto_neg,
+                                     proj_dim=proto_dim, tau=proto_tau)
 
     def fuse_layers(self, hidden_states):
         """[B, K, L, D] → [B, L, D]。
@@ -267,9 +343,10 @@ class AIPHead(nn.Module):
         w = torch.softmax(self.layer_w, dim=0).to(hidden_states.dtype)
         return (hidden_states * w.view(1, -1, 1, 1)).sum(dim=1)
 
-    def forward(self, hidden_states, attention_mask, hand_feats=None, seq=None,
-                return_decay=False):
-        """
+    def encode(self, hidden_states, attention_mask, hand_feats=None, seq=None,
+               return_decay=False):
+        """把各支路拼成 [B, feat_dim] 的共享特征（原型旁路也吃这一份）。
+
         hidden_states : [B, L, D] 或 [B, K, L, D]  ESM-2 隐状态
         attention_mask: [B, L]     1 = 有效残基
         hand_feats    : [B, hand_dim] 或 None（hand_dim > 0 时必需）
@@ -286,7 +363,9 @@ class AIPHead(nn.Module):
         else:
             mask = attention_mask.bool()
 
-        parts = []
+        esm_vec = None
+        cfc_vec = None
+        hand_vec = None
         if self.use_esm:
             if hidden_states is None:
                 raise ValueError('AIPHead(use_esm=True) 需要 hidden_states')
@@ -295,7 +374,7 @@ class AIPHead(nn.Module):
             for block in self.cnn:
                 x = block(x, m)                                     # 每次卷积后重新置零
             cnt = m.sum(dim=2).clamp(min=1.0)                       # [B, 1]
-            parts.append((x * m).sum(dim=2) / cnt)                  # [B, D]
+            esm_vec = (x * m).sum(dim=2) / cnt                      # [B, D]
 
         decay = None
         if self.lnn:
@@ -305,13 +384,43 @@ class AIPHead(nn.Module):
             # CfC 只递推到 batch 内最长的那条肽，掩码要跟着截断
             mf = mask[:, :hs.shape[1]].unsqueeze(2).to(hs.dtype)     # [B, l_eff, 1]
             cnt_l = mf.sum(dim=1).clamp(min=1.0)
-            parts.append(self.seq_norm((hs * mf).sum(dim=1) / cnt_l))
+            cfc_vec = self.seq_norm((hs * mf).sum(dim=1) / cnt_l)
 
         if self.use_hand and self.hand_dim > 0 and hand_feats is not None:
-            parts.append(hand_feats)
+            hand_vec = hand_feats
 
-        feat = parts[0] if len(parts) == 1 else torch.cat(parts, dim=1)
-        logits = self.out(self.shared(feat)).squeeze(1)             # [B]
+        if self.fuse == 'late':
+            if esm_vec is None or hand_vec is None:
+                raise ValueError('fuse=late 需要同时给出 hidden_states 与 hand_feats')
+            he = self.esm_proj(esm_vec)
+            hh = self.hand_proj(hand_vec)
+            feat = torch.cat([he, hh, he * hh, torch.abs(he - hh)], dim=1)
+        else:
+            parts = [v for v in (esm_vec, cfc_vec, hand_vec) if v is not None]
+            if not parts:
+                raise ValueError('没有任何支路输出可用（esm/hand/lnn 全空）')
+            feat = parts[0] if len(parts) == 1 else torch.cat(parts, dim=1)
+        return (feat, decay) if return_decay else feat
+
+    def forward(self, hidden_states, attention_mask, hand_feats=None, seq=None,
+                return_decay=False, return_proto=False):
+        """logits = A + alpha * B；return_proto=True 时返回 (logits, 分量字典)。
+
+        分量字典：A（主分支 logit）、B（原型 logit）、s_pos / s_neg（相似度矩阵），
+        供训练时的辅助损失与事后解释使用。原型关闭时分量字典为 None。
+        """
+        feat, decay = self.encode(hidden_states, attention_mask, hand_feats, seq,
+                                  return_decay=True)
+        a = self.out(self.shared(feat)).squeeze(1)                  # [B]
+        aux = None
+        if self.proto_enabled:
+            b, sp, sn = self.proto(feat)
+            logits = a + self.proto_alpha * b
+            aux = {'A': a, 'B': b, 's_pos': sp, 's_neg': sn}
+        else:
+            logits = a
+        if return_proto:
+            return logits, aux
         return (logits, decay) if return_decay else logits
 
     @torch.no_grad()
