@@ -117,7 +117,7 @@ python scripts/train_aip.py --fold 0 --exp dbg0 --device mps   # 强制 Apple GP
 
 ```bash
 python scripts/preflight.py     # 数据/划分/缓存/权重/磁盘，全部 OK 才开跑
-python scripts/run_5fold.py --exp cv5 --note "5折主实验"
+python scripts/run_5fold.py --exp fixedtest_cv5 --note "固定test主实验"
 ```
 
 `preflight.py` 退出码 0 表示可以开跑；任何硬性阻塞（GPU 卷积失败、划分缺失、磁盘不足）会返回 1。

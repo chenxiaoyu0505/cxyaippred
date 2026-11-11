@@ -127,10 +127,10 @@ experiments\<exp>\
 
 也就是说：项目内没有第二个 src，只有一份旧代码快照目录。
 
-真正的风险在 `features.py`（694 维手工特征）——它现在有三份**物理副本**
+真正的风险在 `features.py`（704 维手工特征 = 694 维基础块 + 10 维两亲性）——它现在有三份**物理副本**
 （`immudualpred\src\`、`cxyaippred\src\`、`cxyaippred\scripts\legacy_multitask\`），
 内容目前相同但会漂移。新项目只准用 `cxyaippred\src\features.py`；
-`scripts/selftest.py` 会断言它输出 694 维且无 NaN，改坏了会当场失败。
+`scripts/selftest.py` 会断言基础块输出 694 维且无 NaN，改坏了会当场失败。
 
 ---
 
@@ -144,10 +144,10 @@ experiments\<exp>\
 | 完整 state_dict | 2.69 GB | 13.5 GB | 40 GB |
 | 只存头（现方案） | **80 MB** | 0.4 GB | 1.2 GB |
 
-* `AIPHead`：ResCNN(1280, 2 块) + 掩码均值池化 + 拼 694 维手工特征 + MLP(512)，
+* `AIPHead`：ResCNN(1280, 2 块) + 掩码均值池化 + 拼 704 维手工特征（694 + 10 两亲性）+ MLP(512)，
   共 **20.95M 参数 / 80.0 MB**。
 * ESM-2 **不进权重文件**，只在 meta 里记名字 `facebook/esm2_t33_650M_UR50D` 与层号 `-1`。
-* 文件格式见 `src/checkpoint.py`（`format = cxyaippred-aip-head-v1`）。
+* 文件格式见 `src/checkpoint.py`（`format = cxyaippred-aip-head-v3`）。
 
 **推理形态（已定）：5 折集成。**（部署形态；CV 评估只报单折，不能在同一批数据上估 5 模型集成。）ESM 只前向一次，然后分别过 5 个头，取平均概率；
 同时输出折间标准差（分歧大 = 该序列可能落在训练分布外）。
@@ -164,9 +164,9 @@ experiments\<exp>\
 - [x] 新单任务模型定义 `src/model_aip.py`
 - [x] 权重格式与读写 `src/checkpoint.py`
 - [x] 集成推理脚本 `scripts/predict.py`
-- [x] 自检 `scripts/selftest.py`（前向形状、变长掩码、round-trip、体积、拒绝非法格式、694 维）
+- [x] 自检 `scripts/selftest.py`（前向形状、变长掩码、round-trip、体积、拒绝非法格式、694 维基础块）
 - [x] 旧权重迁移工具 `scripts/convert_legacy_head.py`（2.51 GB → 80 MB，已完成一次验证）
-- [x] **训练 `scripts/train_aip.py`**（EMA-SAT 可开关、按 val AUPR 早停、val 上选阈值）
+- [x] **训练 `scripts/train_aip.py`**（EMA-SAT 可开关、按 val AUROC 早停、val 上选阈值）
 - [x] **评估 `scripts/eval_aip.py`**（free/@0.5/@val 三口径 + bootstrap CI，只报单折）
 - [x] **统筹 `scripts/run_5fold.py`**（自动建划分→建缓存→5 折训练→评估→写 manifest→删缓存）
 - [x] **对照 `scripts/run_legacy.py`**（原 4,224 训练 / 462 测试，用于和外部基线并表）

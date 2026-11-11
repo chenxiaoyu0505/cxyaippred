@@ -172,3 +172,27 @@
 
 **判定规则**（事先写死）：若 p=0.10 时 EMA 组的 AUPR 衰减显著小于对照组（差值 CI 不跨 0），
 "噪声鲁棒"成立，可写进正文；若两条线平行，则 EMA-SAT 只能作为精度技巧陈述，不得提抗噪。
+
+---
+
+## D-17 主指标改为 AUROC，AUPR 并列报告（2026-11-11）
+
+**决定**
+- 全项目**主指标 = AUROC**：早停、选最优 epoch、主表排序、总表 `_index.csv` 都以 AUROC 为准。
+- AUPR 继续计算、继续并列报告，但降为次要指标；MCC / F1 / Acc 仍按 `@0.5` 与 `@val` 两种阈值口径报。
+- 实现上只留一个开关：`src/config.py::TrainCfg.monitor='auroc'`，`train_aip.py --monitor aupr`
+  可以退回旧行为；`run_5fold.py --monitor` 透传。阈值搜索仍按 val MCC，不变。
+
+**理由**
+- 用户在 2026-11-11 决定以 ROC-AUC 为准；此前所有运行（cv5 等）都以 AUPR 选优。
+- AUPR 对阳性率敏感：换成固定 452 条 test（阳性率 38.7%）后，AUPR 的绝对值不可跨数据集比较，
+  而 AUROC 在同一 test 上是同一把尺子，更适合做"同一批肽上的配对比较"。
+- 报告里两者都给，所以这不会丢信息。
+
+**代价**
+- 2026-11-11 之前的实验（`cv5`、`cv5_full`、`cv5_ema*`、`fixedtest_cv5_3b`）都是按 val AUPR
+  选的最优 epoch，与新规则不完全同口径；跨实验比较时要标注这一点。
+- 老文档里的"主指标 AUPR"表述需要同步改（已改 README、README.zh-CN、plan/README、plan/RUNS、
+  docs 计划书）。
+
+**被否**：只报 AUPR（阳性率一变就不可比）；只报 MCC（阈值依赖，正是旧稿被质疑的点）。

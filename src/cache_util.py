@@ -28,11 +28,12 @@ def _read_meta(cache_dir):
         return None
 
 
-def has_cache(cache_dir, expected_n=None):
+def has_cache(cache_dir, expected_n=None, esm_name=None):
     """mask / index / meta 语义齐了、且两种 emb 至少有一个，才算有缓存。
 
     ``expected_n`` 给出时还会校验 meta 里的 ``n_rows``，避免 4,686 行旧缓存
-    被拿去配 4,634 行新表。
+    被拿去配 4,634 行新表；``esm_name`` 给出时校验 meta 里的模型名，避免
+    ``--esm-name facebook/esm2_t36_3B_UR50D`` 静默复用 650M 的缓存。
     """
     ok = all(os.path.exists(os.path.join(cache_dir, fn))
              for fn in ('esm_mask.npy', 'esm_index.csv', 'esm_meta.json'))
@@ -43,6 +44,8 @@ def has_cache(cache_dir, expected_n=None):
     if meta.get('mask') != 'residues_only_v1':
         return False
     if expected_n is not None and meta.get('n_rows') != expected_n:
+        return False
+    if esm_name is not None and meta.get('esm_name') != esm_name:
         return False
     return True
 

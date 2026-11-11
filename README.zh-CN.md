@@ -3,7 +3,7 @@
 抗炎肽（AIP, anti-inflammatory peptide）活性预测：蛋白质语言模型表征 + 理化描述符，
 一条小而可审计的训练/评估管线，目标是可复现的基准对比，而不是刷新排行榜。
 
-**状态**：代码完成并通过自检；干净 5 折基线见 `experiments/cv5`。
+**状态**：默认协议为 4,182 条训练池内做 5 折 train/val，并在同一份独立的 452 条 test 上评估。`experiments/cv5` 是旧随机五折协议的历史结果；新协议尚无已提交的训练结果。
 
 [English](README.md) | 中文
 
@@ -19,7 +19,7 @@
   共享 512 维层，输出单值 logit
 - **可选训练技巧**（默认关闭，可独立消融）：
   EMA 自蒸馏（EMA-SAT）
-- **评估** —— 固定 5 折划分；阈值无关指标（AUROC/AUPR）与阈值相关指标并列报告；
+- **评估** —— 固定独立 test + 训练池内 5 折 train/val；阈值无关指标（AUROC 为主，AUPR 并列）与阈值相关指标并列报告；
   bootstrap 置信区间
 
 两条设计规则保证数字可审计：
@@ -49,15 +49,21 @@ python scripts/check_env.py
 
 | 文件 | 行数 | 说明 |
 |---|---|---|
-| `data/aip_all.csv` | 4,686 | `sequence,label`；阳性 1,840（39.3%） |
-| `data/splits/split_seed42_n5/folds.csv` | 23,430 | 长表：`sequence,label,fold,split` |
-| `data/splits/legacy_seed42/folds.csv` | 5,148 | 原 4,224/462 划分，用于与已发表基线比较 |
+| `data/aip_train_nobip.csv` | 4,182 | 默认训练池；阳性 1,613 |
+| `data/aip_test_nobip.csv` | 452 | 固定独立 test；阳性 175 |
+| `data/aip_all_nobip.csv` | 4,634 | BIP-free 规范主表；阳性 1,788 |
+| `data/splits/split_origtest_cv5_seed42_nobip/table.csv` | 4,634 | 默认训练主表，按行号对齐缓存；包含训练池和固定 test |
+| `data/splits/split_origtest_cv5_seed42_nobip/folds.csv` | 23,170 | 默认长表：每折 train/val 来自训练池，test 均为同一份 452 条 |
+| `data/aip_all.csv` | 4,686 | 含 BIP 的历史主表 |
+| `data/splits/split_seed42_n5/folds.csv` | 23,430 | 历史随机五折划分 |
+| `data/splits/legacy_seed42/folds.csv` | 4,686 | 单折（fold 0）：3,379 train / 845 val / 462 test，用于与已发表基线比较 |
 
-阳性率 39.3%，长度中位数 15 aa（最长 73）。无重复序列、无冲突标签；
-5 折的测试集互不重叠且恰好覆盖全集一次。
+默认协议中，5 折的验证集互不重叠并覆盖 4,182 条训练池一次；各折的 test 完全相同。
+因此五个 test 分数反映不同训练/验证划分下模型的变化，不能当作五份独立测试集。
 
 划分是**固定产物**而不是训练时现场生成：每次运行都会记录它的 SHA-256，
-`scripts/make_5fold.py` 可以从 `data/aip_all.csv` 逐位复现同一份划分。
+默认划分由 `scripts/make_holdout_cv.py` 从上述 train/test 文件生成。
+历史随机五折可用 `--split-id split_seed42_n5` 复现，并需同时指定 `--data data/aip_all.csv`。
 
 ---
 
@@ -66,11 +72,11 @@ python scripts/check_env.py
 ```bash
 python scripts/preflight.py                                    # 数据 / 划分 / 缓存 / 权重 / 磁盘
 
-python scripts/run_5fold.py --exp cv5 --note "5 折基线"                  # 5 折，不加技巧
-python scripts/run_5fold.py --exp cv5_ema_fix --ema                      # + EMA 自蒸馏
+python scripts/run_5fold.py --exp fixedtest_cv5 --note "固定 test 基线"
+python scripts/run_5fold.py --exp fixedtest_cv5_ema --ema               # + EMA 自蒸馏
 
 python scripts/list_exps.py                                   # 所有实验，一行一个
-python scripts/list_exps.py --exp cv5_ema_fix                 # 单个实验的逐折明细
+python scripts/list_exps.py --exp fixedtest_cv5              # 单个实验的逐折明细
 ```
 
 调试用的单折训练与评估：
@@ -83,7 +89,7 @@ python scripts/eval_aip.py  --exp dbg --n-boot 200
 用 5 折集成做预测（ESM 只前向一次，多个头取平均）：
 
 ```bash
-python scripts/predict.py --runs-dir experiments/cv5/runs --fasta peptides.fasta
+python scripts/predict.py --runs-dir experiments/fixedtest_cv5/runs --fasta peptides.fasta
 ```
 
 ### 关键参数
@@ -91,6 +97,7 @@ python scripts/predict.py --runs-dir experiments/cv5/runs --fasta peptides.fasta
 | 参数 | 含义 |
 |---|---|
 | `--exp NAME` | 实验名，必填，仅 `a-z0-9_-`，重名拒绝 |
+| `--split-id` | 默认 `split_origtest_cv5_seed42_nobip`；历史实验需显式指定旧划分及对应 `--data` |
 | `--ema` | 开启 EMA 自蒸馏（`--ema-alpha-min` 默认 0.7、`--ema-start-epoch` 2、`--ema-tau` 1.0、`--ema-decay` 0.65） |
 | `--label-noise 0.1` | 翻转 10% 的**训练**标签（逐条记录在 `label_noise.json`），用于检验抗噪性 |
 | `--device auto` | `auto` → CUDA → MPS → CPU |
@@ -149,6 +156,6 @@ plan/         项目缘由、决策记录、审稿意见对照
 
 ## 已知局限
 
-- 5 折给出的是**划分方差**，不是训练方差；多 seed 已支持（`--seeds`），但尚未纳入默认协议。
+- 固定 test 上的五个分数共享同一批样本，其标准差是不同 train/val 划分下的模型变化，不是测试集抽样方差；多 seed 已支持（`--seeds`），但尚未纳入默认协议。
 - 旧对比表只有 0/1 预测，无法反推 AUROC/AUPR——要做阈值无关比较，必须重跑基线拿到概率。
 - 模型权重不随仓库分发。

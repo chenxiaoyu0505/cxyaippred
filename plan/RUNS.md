@@ -36,7 +36,7 @@
   | 折 | 0–4，共 5 折 |
   | model seed | 0 |
   | epochs / batch / lr | 50 / 16 / 1e-4 |
-  | patience（val AUPR 早停） | 10 |
+  | patience（val AUROC 早停，默认） | 10 |
   | EMA-SAT | 关 |
   | MCC 类权重（已移除） | 关（当时未启用） |
   | label-noise | 0 |

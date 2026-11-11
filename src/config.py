@@ -75,9 +75,9 @@ class ModelCfg:
 @dataclass
 class DataCfg:
     """数据与划分"""
-    data_csv: str = 'data/aip_all.csv'
-    folds_csv: str = 'data/splits/split_seed42_n5/folds.csv'
-    split_id: str = 'split_seed42_n5'
+    data_csv: str = 'data/splits/split_origtest_cv5_seed42_nobip/table.csv'
+    folds_csv: str = 'data/splits/split_origtest_cv5_seed42_nobip/folds.csv'
+    split_id: str = 'split_origtest_cv5_seed42_nobip'
     split_sha256: str = ''    # 由 run 脚本填入，写进 config.json 作证据
     cache_dir: str = 'cache'
 
@@ -103,7 +103,8 @@ class TrainCfg:
     batch_size: int = 16
     lr: float = 1e-4
     weight_decay: float = 0.0
-    patience: int = 10        # 早停：val AUPR 连续 N 轮不升
+    patience: int = 10        # 早停：监控指标连续 N 轮不升
+    monitor: str = 'auroc'    # 早停/选最优 epoch 的指标：auroc（默认）或 aupr
     grad_clip: float = 0.0
     pos_weight: float = 0.0   # 0 = 不加权；>0 = BCE 的 pos_weight（固定值）
     device: str = 'cuda'

@@ -16,7 +16,7 @@
     val_probs.csv      sequence,label,prob      ← 选阈值用
     test_probs.csv     sequence,label,prob      ← 评估用
     all_probs.csv      全部 4,686 行的概率       ← 供误差分析 / 外部评估
-    train_log.csv      每 epoch 的 loss / val AUPR / EMA 诊断
+    train_log.csv      每 epoch 的 loss / val AUROC / AUPR / EMA 诊断
     threshold.json     验证集搜出的阈值
 
 用法
@@ -110,9 +110,10 @@ def train_epoch(head, opt, sat, tr_idx, emb, mask, hand, y, cfg, device,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--data', default=os.path.join(ROOT, 'data', 'aip_all.csv'))
+    ap.add_argument('--data', default=os.path.join(ROOT, 'data', 'splits',
+                                                  'split_origtest_cv5_seed42_nobip', 'table.csv'))
     ap.add_argument('--folds', default='', help='默认 data/splits/<split-id>/folds.csv')
-    ap.add_argument('--split-id', default='split_seed42_n5')
+    ap.add_argument('--split-id', default='split_origtest_cv5_seed42_nobip')
     ap.add_argument('--cache-dir', default=os.path.join(ROOT, 'cache'))
     ap.add_argument('--exp', default='', help='实验名：产物写 experiments/<exp>/runs/')
     ap.add_argument('--out', default='', help='显式指定 run 的父目录（优先于 --exp）')
@@ -123,6 +124,8 @@ def main():
     ap.add_argument('--lr', type=float, default=1e-4)
     ap.add_argument('--weight-decay', type=float, default=0.0)
     ap.add_argument('--patience', type=int, default=10)
+    ap.add_argument('--monitor', default='', choices=['', 'auroc', 'aupr'],
+                    help='早停 / 选最优 epoch 用的验证指标，默认 auroc（AUPR 仍照常记录）')
     ap.add_argument('--pos-weight', type=float, default=0.0)
     ap.add_argument('--label-noise', type=float, default=0.0,
                     help='标签噪声注入比例（只翻训练行，对称翻转；默认 0=不动）')
@@ -136,8 +139,8 @@ def main():
     ap.add_argument('--ema-tau', type=float, default=1.0,
                     help='α 半衰期（epoch）；1.0 即每轮减半')
     ap.add_argument('--norm', default='', choices=['', 'layer', 'peptide_bn', 'masked_batch', 'batch'],
-                    help="残差块归一化。默认 layer（逐位置 LayerNorm）；"
-                         "peptide_bn = masked BN + 按肽等权；masked_batch = masked BN 按残基等权；"
+                    help="残差块归一化。默认 peptide_bn（掩码 BN、按肽等权）；"
+                         "layer = 逐位置 LayerNorm；masked_batch = masked BN 按残基等权；"
                          "batch = 原生 BN（padding 进统计量，仅消融/复现旧行为）")
     ap.add_argument('--hand-norm', default='', choices=['', 'standard', 'none'],
                     help='手工特征标准化。默认 standard（每折只用训练行拟合 mean/std）；'
@@ -179,6 +182,8 @@ def main():
     cfg.train.lr = args.lr
     cfg.train.weight_decay = args.weight_decay
     cfg.train.patience = args.patience
+    if args.monitor:
+        cfg.train.monitor = args.monitor
     cfg.train.pos_weight = args.pos_weight
     cfg.train.label_noise = args.label_noise
     cfg.train.device = args.device
@@ -330,7 +335,9 @@ def main():
     pos_weight = torch.tensor([cfg.train.pos_weight], device=device) \
         if cfg.train.pos_weight > 0 else None
 
-    best_aupr, best_epoch, best_state = -1.0, -1, None
+    best_score, best_epoch, best_state = -1.0, -1, None
+    best_aupr = best_auc = float('nan')
+    monitor = cfg.train.monitor
     log_rows = []
     t0 = time.time()
 
@@ -369,22 +376,26 @@ def main():
 
         log_rows.append(row)
         if not args.quiet:
-            print('  ep%02d loss %.4f | val AUPR %.4f AUROC %.4f | ema %.3f±%.3f α %.2f β %.2f%s'
-                  % (epoch, loss, val_aupr, val_auc, st['ema_mean'], st['ema_std'],
+            print('  ep%02d loss %.4f | val AUROC %.4f AUPR %.4f | ema %.3f±%.3f α %.2f β %.2f%s'
+                  % (epoch, loss, val_auc, val_aupr, st['ema_mean'], st['ema_std'],
                      st['alpha'], st['beta'],
                      '' if sat.active else ' (warmup)'), end='\r')
 
-        if val_aupr > best_aupr:
-            best_aupr, best_epoch = val_aupr, epoch
+        score = val_auc if monitor == 'auroc' else val_aupr
+        if score > best_score:
+            best_score, best_epoch = score, epoch
+            best_aupr, best_auc = val_aupr, val_auc
             best_state = {k: v.detach().cpu().clone() for k, v in head.state_dict().items()}
         elif epoch - best_epoch >= cfg.train.patience:
-            print('\n[%s] 早停于 ep%d（最优 ep%d, val AUPR %.4f）'
-                  % (run_name, epoch, best_epoch, best_aupr))
+            print('\n[%s] 早停于 ep%d（最优 ep%d, val %s %.4f）'
+                  % (run_name, epoch, best_epoch,
+                     'AUROC' if monitor == 'auroc' else 'AUPR', best_score))
             break
 
     head.load_state_dict(best_state)
-    print('\n[%s] 训练完毕：最优 ep%d, val AUPR %.4f, 用时 %.0fs'
-          % (run_name, best_epoch, best_aupr, time.time() - t0))
+    print('\n[%s] 训练完毕：最优 ep%d, val AUROC %.4f / AUPR %.4f（按 %s 选优）, 用时 %.0fs'
+          % (run_name, best_epoch, best_auc, best_aupr,
+             cfg.train.monitor.upper(), time.time() - t0))
 
     # ---- 落盘：概率 ----
     all_p = predict_ordered(head, np.arange(n), emb, mask, hand, device,
@@ -398,7 +409,8 @@ def main():
                'model_seed': cfg.train.seed,
                'split_sha256': cfg.data.split_sha256,
                'ema': bool(cfg.ema.enabled),
-               'best_epoch': best_epoch, 'val_aupr': best_aupr, **thr},
+               'best_epoch': best_epoch, 'monitor': cfg.train.monitor,
+               'val_auroc': best_auc, 'val_aupr': best_aupr, **thr},
               os.path.join(run_dir, 'threshold.json'))
 
     pd.DataFrame({'sequence': table['sequence'].values[folds['val']],
@@ -415,7 +427,8 @@ def main():
 
     save_head(head, os.path.join(run_dir, 'best.pt'), {
         'fold': cfg.fold, 'seed': cfg.train.seed,
-        'threshold': thr['threshold'], 'val_aupr': best_aupr,
+        'threshold': thr['threshold'], 'monitor': cfg.train.monitor,
+        'val_auroc': best_auc, 'val_aupr': best_aupr,
         'split_id': cfg.data.split_id,
         'hand_norm': cfg.model.hand_norm,
         'hand_extra': cfg.model.hand_extra,

@@ -7,7 +7,7 @@
 --------------------------------------------
     @0.5     固定阈值，不受任何调参影响，最保守
     @val     每折在验证集上搜出的阈值（旧稿用的就是这个，必须公开）
-    free     AUROC / AUPR，与阈值无关，**主指标**
+    free     AUROC（**主指标**）/ AUPR，与阈值无关
 
 汇总方式
 --------
@@ -71,7 +71,7 @@ def summary_markdown(df, summary, args, runs):
              '- 实验：`%s`' % (args.exp or '(未命名)'),
              '- 划分：`%s`' % runs[0]['split_id'],
              '- run 数：%d（fold %s）' % (n_runs, ', '.join(str(r['fold']) for r in runs)),
-             '- 主指标：AUROC / AUPR（阈值无关）；MCC / F1 另报 `@0.5` 与 `@val` 两种口径', '',
+             '- 主指标：AUROC（阈值无关）；AUPR 并列报告；MCC / F1 另报 `@0.5` 与 `@val` 两种口径', '',
              '## 汇总（折间 mean ± sd，sd 只由各折均值计算）', '',
              '| 口径 | n | AUROC | AUPR | MCC | F1 |',
              '|---|---|---|---|---|---|']

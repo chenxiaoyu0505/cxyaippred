@@ -4,7 +4,7 @@ Anti-inflammatory peptide (AIP) prediction with protein language model embedding
 physicochemical descriptors — a small, auditable training/evaluation pipeline built for
 reproducible benchmarking rather than leaderboard chasing.
 
-**Status:** code complete and self-tested; the clean 5-fold baseline is recorded in `experiments/cv5`.
+**Status:** the default protocol uses 5 train/validation folds within 4,182 training peptides and evaluates every model on the same independent 452-peptide test set. `experiments/cv5` records an older random-fold protocol; no results from the new protocol are committed yet.
 
 English | [中文](README.zh-CN.md)
 
@@ -21,7 +21,7 @@ Given a peptide sequence, predict whether it is anti-inflammatory.
   concatenation with the handcrafted vector, shared 512-d layer, single logit
 - **Optional training trick** (off by default, ablatable):
   EMA self-distillation ("EMA-SAT")
-- **Evaluation** — fixed 5-fold splits, threshold-free metrics (AUROC/AUPR) reported
+- **Evaluation** — fixed independent test plus 5 train/validation folds, threshold-free metrics (AUROC primary, AUPR also reported)
   alongside thresholded ones and bootstrap CIs
 
 Two design rules make the numbers auditable:
@@ -55,10 +55,16 @@ Platform specifics, verified versions and expected runtimes: **[docs/INSTALL.md]
 |---|---|---|
 | `data/aip_all.csv` | 4,686 | `sequence,label`; 1,840 positives (39.3%); original, includes 56 row-level BIPs |
 | `data/aip_all_nobip.csv` | 4,634 | BIP-free canonical table; 1,788 positives (38.6%); removes the 56 row-level BIPs and restores the 4 HD-AIP-only positives |
+| `data/aip_train_nobip.csv` | 4,182 | default training pool; 1,613 positives |
+| `data/aip_test_nobip.csv` | 452 | fixed independent test; 175 positives |
+| `data/splits/split_origtest_cv5_seed42_nobip/table.csv` | 4,634 | default row-aligned table for model inputs and caches |
 | `data/splits/split_seed42_n5/folds.csv` | 23,430 | long format: `sequence,label,fold,split` |
-| `data/splits/split_seed42_n5_nobip/folds.csv` | 23,150 | historical 4,630 BIP-free split (do not use with the current 4,634 table) |
 | `data/splits/split_origtest_cv5_seed42_nobip/folds.csv` | 23,170 | fixed original test 452; 5-fold train/val inside train 4,182 |
-| `data/splits/legacy_seed42/folds.csv` | 5,148 | original 4,224/462 split, for comparison with published baselines |
+| `data/splits/legacy_seed42/folds.csv` | 4,686 | single fold (fold 0): 3,379 train / 845 val / 462 test, for comparison with published baselines |
+
+The historical 4,630-row `split_seed42_n5_nobip` split is not shipped: its source table
+is no longer in the repo, so it would only point at a dead path. Use the 4,634-row
+canonical table and `split_origtest_cv5_seed42_nobip` instead.
 
 The original dataset has positive rate 39.3%, median length 15 aa (max 73). No duplicate
 sequences and no conflicting labels. In `split_seed42_n5`, the 5 test folds partition the
@@ -71,6 +77,10 @@ sequence-level AIP+/PIP+ peptides that exist as separate AIP and PIP rows. The f
 HD-AIP-only positives are restored on top, so the canonical table is 4,634 rows.
 The old `aip_all.csv` and `split_seed42_n5` remain unchanged for historical reproducibility;
 the 4,630-row `split_seed42_n5_nobip` is historical and no longer matches this table.
+
+The fixed-test split is the default. Its five validation folds partition the 4,182 training
+peptides, while all five models are evaluated on the same 452 test peptides. Their test
+scores are repeated evaluations on one test set, not five independent test samples.
 
 Each split is a fixed artifact, not something regenerated at training time: each run records
 its SHA-256, and `scripts/make_5fold.py` reproduces it bit-for-bit from the corresponding CSV
@@ -87,11 +97,11 @@ disjoint test sets.
 ```bash
 python scripts/preflight.py                                   # data / splits / cache / weights / disk
 
-python scripts/run_5fold.py --exp cv5 --note "5-fold baseline"          # 5 folds, no extras
-python scripts/run_5fold.py --exp cv5_ema_fix --ema                      # + EMA self-distillation
+python scripts/run_5fold.py --exp fixedtest_cv5 --note "fixed-test baseline"
+python scripts/run_5fold.py --exp fixedtest_cv5_ema --ema               # + EMA self-distillation
 
 python scripts/list_exps.py                                   # all experiments, one row each
-python scripts/list_exps.py --exp cv5_ema_fix                 # per-fold detail
+python scripts/list_exps.py --exp fixedtest_cv5               # per-fold detail
 ```
 
 Single-fold training and evaluation, for debugging:
@@ -104,7 +114,7 @@ python scripts/eval_aip.py  --exp dbg --n-boot 200
 Prediction with a 5-fold ensemble (ESM is forwarded once, heads are averaged):
 
 ```bash
-python scripts/predict.py --runs-dir experiments/cv5/runs --fasta peptides.fasta
+python scripts/predict.py --runs-dir experiments/fixedtest_cv5/runs --fasta peptides.fasta
 ```
 
 ### Key options
@@ -112,6 +122,7 @@ python scripts/predict.py --runs-dir experiments/cv5/runs --fasta peptides.fasta
 | Option | Meaning |
 |---|---|
 | `--exp NAME` | experiment id; required, `a-z0-9_-`, collisions refused |
+| `--split-id` | defaults to `split_origtest_cv5_seed42_nobip`; historical runs need the old split and matching `--data` explicitly |
 | `--ema` | enable EMA self-distillation (`--ema-alpha-min` default 0.7, `--ema-start-epoch` 2, `--ema-tau` 1.0, `--ema-decay` 0.65) |
 | `--label-noise 0.1` | flip 10% of *training* labels (audited in `label_noise.json`) to probe robustness |
 | `--device auto` | `auto` → CUDA → MPS → CPU |
@@ -175,7 +186,7 @@ per fold — is produced by one implementation in
 
 ## Limitations
 
-- Five folds give an estimate of split variance, not training variance; multi-seed runs are
+- The five test scores share the same test peptides; their SD describes variation across train/validation folds, not test-sample uncertainty. Multi-seed runs are
   supported (`--seeds`) but not yet part of the default protocol.
 - The legacy comparison table only contains binary predictions, so AUROC/AUPR cannot be
   derived from it — baselines must be re-run with probability outputs for a threshold-free

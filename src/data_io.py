@@ -5,10 +5,11 @@
 
 数据契约
 --------
-1. `data/aip_all.csv`：唯一数据源，两列 `sequence,label`（4,686 行，无重复序列）。
-2. `data/folds_5cv_seed42.csv`：长表 `sequence,label,fold,split`（4,686 × 5 行）。
-   同一序列在自己那一折里是 test，在其余四折里是 train 或 val。
-3. 所有特征按**行号**对齐：第 i 行就是 aip_all.csv 的第 i 行。
+1. 默认主表是 `data/splits/split_origtest_cv5_seed42_nobip/table.csv`，
+   共 4,634 行（4,182 train pool + 452 固定独立 test）。
+2. 同目录 `folds.csv` 是长表；每折的 test 都是同一份 452 条，
+   训练池内的 5 个 val 互斥并覆盖训练池一次。
+3. 所有特征按**行号**对齐：第 i 行就是本次指定主表的第 i 行。
    fold 文件里的序列被翻译成行号后再用，绝不重新排序——排序一变，全部错位。
 
 缓存
@@ -55,11 +56,21 @@ def sha1_text(s):
     return hashlib.sha1(s.encode('utf-8')).hexdigest()
 
 
+def sha256_crlf(path):
+    """按 CRLF 归一化后算 sha256。
+
+    仓库里的 manifest 是在 Windows 上生成的，记录的是 CRLF 字节的哈希；
+    在 macOS/Linux 上 checkout 出来是 LF，直接对原始字节做哈希会误报不一致。
+    """
+    data = open(path, 'rb').read().replace(b'\r\n', b'\n')
+    return hashlib.sha256(data.replace(b'\n', b'\r\n')).hexdigest()
+
+
 # ---------------------------------------------------------------- 主表
 
 def load_table(path):
     """
-    读 aip_all.csv，返回 DataFrame[sequence, label]，行序 = 文件行序 = 特征行序。
+    读指定主表，返回 DataFrame[sequence, label]，行序 = 文件行序 = 特征行序。
     不做去重，但会检查是否有重复序列（有则报错，因为行号会歧义）。
     """
     df = pd.read_csv(path)
@@ -88,7 +99,7 @@ def load_table(path):
 def load_folds(folds_csv, fold, table):
     """
     返回 {'train': idx, 'val': idx, 'test': idx}，idx 是 table 的行号。
-    会校验：三集合互斥、并集 = 全体、test 恰好等于该 fold 的 test。
+    会校验：该 fold 的 train/val/test 互斥，且并集 = 主表。
     """
     f = pd.read_csv(folds_csv)
     need = {'sequence', 'fold', 'split'}
@@ -119,10 +130,32 @@ def load_folds(folds_csv, fold, table):
 
 
 def check_folds_complete(folds_csv, table):
-    """5 折的 test 必须正好把主表切成 5 份、互不重叠"""
+    """校验 folds.csv 与主表的覆盖关系，返回 'fixed' 或 'partition'。
+
+    * ``fixed``    —— 每折的 test 完全相同（固定独立测试协议）；
+    * ``partition``—— 各折 test 互不重叠且并集等于主表（随机五折协议）。
+
+    两种协议都要求每折的 train/val/test 互斥、并集等于主表。旧版只认
+    ``partition``，会把固定 test 的划分误判成"两折 test 有交集"。
+    """
     f = pd.read_csv(folds_csv)
-    tests = [set(f[(f.fold == k) & (f.split == 'test')]['sequence']) for k in sorted(f.fold.unique())]
     allseq = set(table['sequence'])
+    folds = sorted(f['fold'].unique())
+    parts = {}
+    for k in folds:
+        sub = f[f['fold'] == k]
+        tr = set(sub.loc[sub['split'] == 'train', 'sequence'])
+        va = set(sub.loc[sub['split'] == 'val', 'sequence'])
+        te = set(sub.loc[sub['split'] == 'test', 'sequence'])
+        parts[k] = (tr, va, te)
+        if (tr & va) or (tr & te) or (va & te):
+            raise SystemExit('fold=%s 的 train/val/test 有重叠' % k)
+        if (tr | va | te) != allseq:
+            raise SystemExit('fold=%s 只覆盖 %d/%d 行'
+                             % (k, len(tr | va | te), len(allseq)))
+    tests = [parts[k][2] for k in folds]
+    if all(t == tests[0] for t in tests):
+        return 'fixed'
     for i, a in enumerate(tests):
         for b in tests[i + 1:]:
             if a & b:
@@ -130,7 +163,7 @@ def check_folds_complete(folds_csv, table):
     if set().union(*tests) != allseq:
         raise SystemExit('各折 test 的并集不等于主表（差 %d 条）'
                          % len(allseq - set().union(*tests)))
-    return True
+    return 'partition'
 
 
 # ---------------------------------------------------------------- 特征缓存
@@ -185,7 +218,7 @@ def hand_feats(table, cache_dir='cache', with_amphipath=False):
 # 特征"在数值上其实只有 2 维在起作用。标准化后每维贡献相当。
 #
 # 为什么按折、只用训练行：val/test 的统计量如果参与均值方差，就是泄漏；
-# 每折各拟一份，是因为 5 折的 test 集合不同，全局统计量同样泄漏。
+# 每折各拟一份，因为只能使用本折 train 行；全局统计量会混入 val/test。
 
 HAND_SCALER_EPS = 1e-8
 

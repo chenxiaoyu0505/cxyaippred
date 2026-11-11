@@ -9,14 +9,14 @@
 
 口径
 ----
-* 阈值无关：AUROC、AUPR（主指标，早停也用它）
+* 阈值无关：AUROC（**主指标**，train 的早停也看它）、AUPR（并列报告）
 * 阈值相关：MCC、F1、Acc、Precision、Recall、Specificity、混淆矩阵四元
 * 不确定性：bootstrap 置信区间（样本级有放回重采样）
 
 用法
 ----
     m = full_metrics(y, p, threshold=0.5)
-    ci = bootstrap_ci(y, p, 'aupr', n_boot=1000, seed=0)
+    ci = bootstrap_ci(y, p, 'auroc', n_boot=1000, seed=0)
 """
 import numpy as np
 
@@ -94,7 +94,7 @@ _BOOT_METRICS = {
 }
 
 
-def bootstrap_ci(y, p, metric='aupr', threshold=None, n_boot=1000, alpha=0.05, seed=0):
+def bootstrap_ci(y, p, metric='auroc', threshold=None, n_boot=1000, alpha=0.05, seed=0):
     """
     样本级有放回重采样，返回 (lo, hi, mean)。
     metric='mcc'/'f1' 时必须给 threshold。

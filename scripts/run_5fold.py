@@ -19,11 +19,11 @@
 
 用法
 ----
-    python scripts/run_5fold.py --exp cv5             # seed 0, 5 折
-    python scripts/run_5fold.py --exp cv5_ema_ramp --ema  # 指数饱和 EMA 消融
-    python scripts/run_5fold.py --seeds 0,1,2        # 3 个 model seed
-    python scripts/run_5fold.py --skip-existing      # 断了接着跑
-    python scripts/run_5fold.py --keep-cache         # 保留 ESM 缓存
+    python scripts/run_5fold.py --exp fixedtest_cv5             # seed 0, 固定 test + 5 折 train/val
+    python scripts/run_5fold.py --exp fixedtest_cv5_ema --ema   # EMA 消融
+    python scripts/run_5fold.py --exp fixedtest_cv5_ms --seeds 0,1,2  # 3 个 model seed
+    python scripts/run_5fold.py --exp fixedtest_cv5 --resume         # 断了接着跑
+    python scripts/run_5fold.py --exp fixedtest_cv5_cache --keep-cache # 保留 ESM 缓存
     python scripts/run_5fold.py --exp x --register   # 跑完登记到 experiments/_index.csv
 
 为什么登记要显式打开
@@ -128,20 +128,22 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--exp', required=True,
                     help='实验名（必填，决定产物目录 experiments/<exp>/）。'
-                         '建议：cv5 / cv5_ema_ramp / legacy；'
+                         '建议：fixedtest_cv5 / fixedtest_cv5_ema / legacy；'
                          '只能用小写字母、数字、下划线和短横线')
     ap.add_argument('--note', default='', help='一句话说明这次为什么跑，写进 manifest 与总表')
     ap.add_argument('--resume', action='store_true',
                     help='实验目录已存在时继续（跳过已完成的 run）')
-    ap.add_argument('--split-id', default='split_seed42_n5')
+    ap.add_argument('--split-id', default='split_origtest_cv5_seed42_nobip')
     ap.add_argument('--data', default='',
-                    help='默认从 split manifest 的 data.file 读取；没有 manifest 时用 data/aip_all.csv')
+                    help='默认从 split manifest 的 data.file 读取；没有 manifest 时要求显式给 --data')
     ap.add_argument('--folds', default='0,1,2,3,4')
     ap.add_argument('--seeds', default='0', help='逗号分隔，例如 0,1,2')
     ap.add_argument('--epochs', type=int, default=50)
     ap.add_argument('--batch-size', type=int, default=16)
     ap.add_argument('--lr', type=float, default=1e-4)
     ap.add_argument('--patience', type=int, default=10)
+    ap.add_argument('--monitor', default='', choices=['', 'auroc', 'aupr'],
+                    help='早停 / 选最优 epoch 的验证指标（默认 auroc；AUPR 仍照常记录）')
     ap.add_argument('--pos-weight', type=float, default=0.0)
     ap.add_argument('--label-noise', type=float, default=0.0, help='标签噪声注入比例（只翻训练行）')
     ap.add_argument('--ema', action='store_true')
@@ -176,7 +178,7 @@ def main():
                     help='建缓存时加载权重的精度；3B 必须 fp16（fp32 要 12 GB）')
     ap.add_argument('--device', default='')
     ap.add_argument('--cache-dir', default='', help='ESM 缓存目录，默认 <root>/cache；'
-                                                   '调试时可指向 _work\\fakecache')
+                                                   '调试时可指向 _work/fakecache')
     ap.add_argument('--keep-cache', action='store_true', help='跑完保留 ESM 缓存')
     ap.add_argument('--rebuild-cache', action='store_true', help='强制重建 ESM 缓存')
     ap.add_argument('--skip-existing', action='store_true',
@@ -194,7 +196,7 @@ def main():
     exp = args.exp.strip()
     if not _re.fullmatch(r'[a-z0-9][a-z0-9_\-]{1,40}', exp):
         raise SystemExit('实验名不合法：%r\n规则：小写字母/数字开头，只能含 a-z 0-9 _ -，2–41 个字符。'
-                         '\n例：--exp cv5   /   --exp cv5_ema' % args.exp)
+                         '\n例：--exp fixedtest_cv5 / --exp fixedtest_cv5_ema' % args.exp)
     args.exp = exp
     exp_dir_probe = os.path.join(ROOT, 'experiments', exp)
     runs_probe = os.path.join(exp_dir_probe, 'runs')
@@ -220,13 +222,32 @@ def main():
     if args.data:
         data_csv = args.data if os.path.isabs(args.data) else os.path.join(ROOT, args.data)
     else:
-        data_csv = os.path.join(ROOT, 'data', 'aip_all.csv')
+        data_csv = ''
         manifest_path = os.path.join(split_dir, 'manifest.json')
         if os.path.exists(manifest_path):
             with open(manifest_path, 'r', encoding='utf-8') as f:
                 rel = json.load(f).get('data', {}).get('file')
             if rel:
                 data_csv = rel if os.path.isabs(rel) else os.path.join(ROOT, rel)
+        if not data_csv:
+            raise SystemExit('划分 %s 的 manifest 缺少 data.file；请显式给 --data' % split_id)
+
+    # ---- 数据必须与划分来自同一份主表（否则行号错位会静默用错标签）----
+    from src.data_io import load_table
+    table = load_table(data_csv)
+    split_table = os.path.join(split_dir, 'table.csv')
+    if os.path.exists(split_table) and not os.path.samefile(data_csv, split_table):
+        ref = load_table(split_table)
+        if (len(ref) != len(table)
+                or dict(zip(ref['sequence'], ref['label']))
+                != dict(zip(table['sequence'], table['label']))):
+            raise SystemExit(
+                '--data 与划分 %s 的主表不一致。\n'
+                '  划分要求：%s（%d 行）\n'
+                '  你给的是：%s（%d 行）\n'
+                '行号一旦错位，训练会静默用错标签；请去掉 --data 或改成上面那份。'
+                % (split_id, os.path.relpath(split_table, ROOT), len(ref),
+                   os.path.relpath(data_csv, ROOT), len(table)))
 
     print('=' * 70)
     print('实验 %s | 折 %s | model seed %s | 共 %d 次训练'
@@ -248,8 +269,8 @@ def main():
         if split_id.startswith(('split_holdout', 'split_origtest')):
             raise SystemExit(
                 '划分 %s 不存在。该口径需先用 make_holdout_cv.py 生成：\n'
-                '  %s scripts\\make_holdout_cv.py --data data\\aip_train_nobip.csv '
-                '--test-data data\\aip_test_nobip.csv --split-id %s '
+                '  %s scripts/make_holdout_cv.py --data data/aip_train_nobip.csv '
+                '--test-data data/aip_test_nobip.csv --split-id %s '
                 '--seed 42 --folds 5'
                 % (split_id, PY, split_id))
         run([PY, os.path.join(HERE, 'make_5fold.py'), '--split-id', split_id,
@@ -257,16 +278,21 @@ def main():
             '生成划分 %s' % split_id)
     else:
         print('\n[1/5] 划分已存在：%s' % os.path.relpath(split_csv, ROOT))
+    from src.data_io import check_folds_complete
+    mode = check_folds_complete(split_csv, table)
+    print('划分校验：%s' % ('固定 test（每折同一份）' if mode == 'fixed'
+                            else '5 折 test 互斥且覆盖主表'))
     print('数据：%s' % os.path.relpath(data_csv, ROOT))
 
     # ---- 2. 缓存 ----
     from src.cache_util import clean_cache, has_cache   # noqa: E402
-    from src.data_io import load_table                  # noqa: E402
     cache_dir = args.cache_dir or os.path.join(ROOT, 'cache')
     if not os.path.isabs(cache_dir):
         cache_dir = os.path.join(ROOT, cache_dir)
-    n_data = len(load_table(data_csv))
-    need_build = args.rebuild_cache or not has_cache(cache_dir, expected_n=n_data)
+    n_data = len(table)
+    need_build = args.rebuild_cache or not has_cache(
+        cache_dir, expected_n=n_data,
+        esm_name=(args.esm_name or 'facebook/esm2_t33_650M_UR50D'))
     if need_build:
         cmd = [PY, os.path.join(HERE, 'cache_esm.py'),
                '--data', data_csv, '--cache-dir', cache_dir]
@@ -325,6 +351,8 @@ def main():
                 cmd += ['--lnn-only']
             if args.device:
                 cmd += ['--device', args.device]
+            if args.monitor:
+                cmd += ['--monitor', args.monitor]
             run(cmd, '训练 fold%d / seed%d' % (k, seed))
             done.append(run_dir)
 
@@ -353,6 +381,7 @@ def main():
             'n_runs': len(folds) * len(seeds),
             'skipped_runs': len(skipped),
             'settings': {'epochs': args.epochs, 'batch_size': args.batch_size,
+                         'monitor': args.monitor or 'auroc',
                          'lr': args.lr, 'patience': args.patience,
                          'pos_weight': args.pos_weight, 'label_noise': args.label_noise, 'ema': args.ema,
                          'ema_alpha_min': args.ema_alpha_min, 'ema_decay': args.ema_decay,
@@ -379,8 +408,8 @@ def main():
         print('\n[保留] ESM 缓存按 --keep-cache 保留')
 
     print('\n实验目录：%s' % os.path.relpath(exp_dir, ROOT))
-    print('  runs\\       %d 个 run' % (len(folds) * len(seeds)))
-    print('  results\\    metrics_detail.csv / metrics.json / summary.md')
+    print('  runs/       %d 个 run' % (len(folds) * len(seeds)))
+    print('  results/    metrics_detail.csv / metrics.json / summary.md')
 
 
 if __name__ == '__main__':
