@@ -153,6 +153,8 @@ def main():
     ap.add_argument('--ema-start-epoch', type=int, default=2)
     ap.add_argument('--ema-tau', type=float, default=1.0,
                     help='α 半衰期（epoch）；1.0 即每轮减半')
+    ap.add_argument('--arch', default='', choices=['', 'cnn', 'mlp'],
+                    help='ESM 编码结构（默认 mlp：直接池化进 MLP；cnn = 旧基线）')
     ap.add_argument('--norm', default='', choices=['', 'layer', 'peptide_bn', 'masked_batch', 'batch'],
                     help='残差块归一化（默认 peptide_bn = masked BN + 按肽等权；'
                          'layer = 逐位置 LayerNorm；masked_batch = masked BN 按残基等权；'
@@ -348,6 +350,8 @@ def main():
                    '--cache-dir', cache_dir]
             if args.ema:
                 cmd.append('--ema')
+            if args.arch:
+                cmd += ['--arch', args.arch]
             if args.norm:
                 cmd += ['--norm', args.norm]
             if args.hand_norm:

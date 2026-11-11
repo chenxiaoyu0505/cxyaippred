@@ -9,6 +9,8 @@
   权重文件里只保存本文件定义的 AIPHead（约 20.96M 参数 / 80 MB）。
 * 5 折 = 5 个 AIPHead（各 ~80 MB），推理时共享一次 ESM-2 前向。
 * 结构沿用原框架：ResCNN(1280) → 掩码均值池化 → 拼接 704 维手工特征 → MLP。
+  `arch='mlp'` 时跳过 ResCNN：ESM 表示直接池化进 MLP（纯 MLP 基线，
+  头部参数从 ~21M 降到 ~1.5M）。
 
 padding 处理（2026-11 修正）
 ---------------------------
@@ -239,12 +241,18 @@ class AIPHead(nn.Module):
 
     def __init__(self, embed_dim=1280, hand_dim=704, hidden=512,
                  n_res=2, cnn_drop=0.2, mlp_drop=0.3, norm='peptide_bn',
+                 arch='cnn',
                  lnn=False, lnn_dim=128, lnn_dt=1.0,
                  use_esm=True, use_hand=True,
                  esm_layers=1, esm_fuse='weighted',
                  proto_pos=0, proto_neg=0, proto_dim=128, proto_tau=0.1,
                  proto_alpha=1.0, fuse='early', fused_dim=128):
         super().__init__()
+        # arch='mlp'：不建 ResBlock，ESM 表示直接掩码均值池化后进 MLP；
+        # n_res / cnn_drop / norm 仅作元信息保留（对结构无影响）。
+        if arch not in ('cnn', 'mlp'):
+            raise ValueError("arch 只能是 'cnn' 或 'mlp'，收到 %r" % (arch,))
+        self.arch = arch
         self.embed_dim = embed_dim
         self.hand_dim = hand_dim
         self.hidden = hidden
@@ -274,8 +282,9 @@ class AIPHead(nn.Module):
             raise ValueError('AIPHead 至少要启用一条支路')
 
         # 用 ModuleList 而非 Sequential：每个 block 要把掩码透传下去
+        # arch='mlp' 时为空表：ESM 表示不经过逐残基加工，直接池化
         self.cnn = nn.ModuleList([ResBlock1D(embed_dim, drop=cnn_drop, norm=norm)
-                                  for _ in range(n_res if self.use_esm else 0)])
+                                  for _ in range(n_res if (self.use_esm and self.arch == 'cnn') else 0)])
         if self.lnn:
             self.cfc = CfCBlock(in_dim=self.seq_dim, hidden=self.lnn_dim,
                                 dt=self.lnn_dt)

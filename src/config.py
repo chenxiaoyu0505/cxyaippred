@@ -35,6 +35,10 @@ class ESMCfg:
 @dataclass
 class ModelCfg:
     """AIPHead（不含 ESM）"""
+    # ESM 表示的编码结构：'cnn' = n_res 个 ResBlock1D 逐残基加工后池化（旧基线，
+    #   ~21M 参数）；'mlp' = 直接掩码均值池化 ESM 表示、只靠下游 MLP（本分支默认，
+    #   头部降到 ~1.5M 参数，用于验证 CNN 加工到底带来多少收益）
+    arch: str = 'mlp'
     embed_dim: int = 1280
     # 占位默认；train_aip.py 会按实际手工特征矩阵覆盖（默认 amphipath=704，消融 694）
     hand_dim: int = 704

@@ -230,6 +230,9 @@ def main():
                     help='从该 epoch 起使用教师；上一轮末初始化 q')
     ap.add_argument('--ema-tau', type=float, default=1.0,
                     help='α 半衰期（epoch）；1.0 即每轮减半')
+    ap.add_argument('--arch', default='', choices=['', 'cnn', 'mlp'],
+                    help="ESM 编码结构：cnn = ResBlock 逐残基加工后池化（旧基线）；"
+                         "mlp = 直接池化进 MLP（本分支默认，头部 ~1.5M 参数）")
     ap.add_argument('--norm', default='', choices=['', 'layer', 'peptide_bn', 'masked_batch', 'batch'],
                     help="残差块归一化。默认 peptide_bn（掩码 BN、按肽等权）；"
                          "layer = 逐位置 LayerNorm；masked_batch = masked BN 按残基等权；"
@@ -300,6 +303,8 @@ def main():
     cfg.ema.decay = args.ema_decay
     cfg.ema.start_epoch = args.ema_start_epoch
     cfg.ema.tau = args.ema_tau
+    if args.arch:
+        cfg.model.arch = args.arch
     if args.norm:
         cfg.model.norm = args.norm
     if args.hand_norm:
@@ -444,7 +449,7 @@ def main():
     head = AIPHead(embed_dim=cfg.model.embed_dim, hand_dim=cfg.model.hand_dim,
                    hidden=cfg.model.hidden, n_res=cfg.model.n_res,
                    cnn_drop=cfg.model.cnn_drop, mlp_drop=cfg.model.mlp_drop,
-                   norm=cfg.model.norm,
+                   norm=cfg.model.norm, arch=cfg.model.arch,
                    lnn=cfg.model.lnn, lnn_dim=cfg.model.lnn_dim,
                    lnn_dt=cfg.model.lnn_dt,
                    use_esm=cfg.model.use_esm, use_hand=cfg.model.use_hand,
@@ -454,8 +459,8 @@ def main():
                    proto_dim=cfg.model.proto_dim, proto_tau=cfg.model.proto_tau,
                    proto_alpha=cfg.model.proto_alpha,
                    fuse=cfg.model.fuse, fused_dim=cfg.model.fused_dim).to(device)
-    print('[%s] 模型 %.2fM 参数 / %.1f MB（lnn=%s esm=%s hand=%s feat=%d layers=%d/%s）'
-          % (run_name, head.n_params() / 1e6, head.size_mb(), head.lnn,
+    print('[%s] 模型 %.2fM 参数 / %.1f MB（arch=%s lnn=%s esm=%s hand=%s feat=%d layers=%d/%s）'
+          % (run_name, head.n_params() / 1e6, head.size_mb(), head.arch, head.lnn,
              head.use_esm, head.use_hand, head.feat_dim,
              head.esm_layers, head.esm_fuse))
     if head.proto_enabled:
@@ -585,6 +590,7 @@ def main():
         'threshold': thr['threshold'], 'monitor': cfg.train.monitor,
         'val_auroc': best_auc, 'val_aupr': best_aupr,
         'split_id': cfg.data.split_id,
+        'arch': cfg.model.arch,
         'hand_norm': cfg.model.hand_norm,
         'hand_extra': cfg.model.hand_extra,
         'hand_select': cfg.model.hand_select,

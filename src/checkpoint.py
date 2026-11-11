@@ -47,10 +47,10 @@ COMPAT_FORMATS = ('cxyaippred-aip-head-v2',)
 LEGACY_FORMATS = ('cxyaippred-aip-head-v1',)
 
 ARCH_KEYS = ('embed_dim', 'hand_dim', 'hidden', 'n_res', 'cnn_drop', 'mlp_drop',
-             'norm', 'lnn', 'lnn_dim', 'use_esm', 'use_hand',
+             'norm', 'arch', 'lnn', 'lnn_dim', 'use_esm', 'use_hand',
              'esm_layers', 'esm_fuse', 'fuse', 'fused_dim',
              'proto_pos', 'proto_neg', 'proto_dim', 'proto_tau', 'proto_alpha')
-ARCH_DEFAULTS = {'norm': 'layer', 'lnn': False, 'lnn_dim': 128,
+ARCH_DEFAULTS = {'norm': 'layer', 'arch': 'cnn', 'lnn': False, 'lnn_dim': 128,
                  'use_esm': True, 'use_hand': True,
                  'esm_layers': 1, 'esm_fuse': 'weighted',
                  'fuse': 'early', 'fused_dim': 128,
