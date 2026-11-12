@@ -189,11 +189,15 @@ def main():
     ap.add_argument('--register', action='store_true',
                     help='跑完把本实验登记到 experiments/_index.csv（该总表被 git 跟踪，'
                          '默认不登记以免弄脏工作区；事后可用 scripts/register_exp.py 补登记）')
+    ap.add_argument('--no-hand', action='store_true',
+                    help='关掉手工特征支路（保留 ESM），消融/融合诊断用')
     ap.add_argument('--lnn-only', action='store_true',
                     help='探针：只训练 CfC 一条支路（关掉 ESM 与手工特征）')
     # ---- 原型旁路（默认关闭）----
     ap.add_argument('--hand-select', default='', choices=['', 'none', 'mi_rf'],
-                    help='手工特征筛选（mi_rf：方差+相关性+互信息+随机森林，≤80 维）')
+                    help='手工/组合特征筛选（mi_rf：方差+相关性+互信息+随机森林）')
+    ap.add_argument('--hand-select-k', type=int, default=80,
+                    help='特征筛选保留的最大维度（默认 80；904 → 300 时设为 300）')
     ap.add_argument('--fuse', default='', choices=['', 'early', 'late'],
                     help='融合方式：late = 两路各投影后做 [h_e,h_h,h_e*h_h,|h_e-h_h|]')
     ap.add_argument('--fused-dim', type=int, default=0,
@@ -369,8 +373,11 @@ def main():
                         '--lnn-dt', str(args.lnn_dt)]
             if args.lnn_only:
                 cmd += ['--lnn-only']
+            if args.no_hand:
+                cmd += ['--no-hand']
             if args.hand_select:
-                cmd += ['--hand-select', args.hand_select]
+                cmd += ['--hand-select', args.hand_select,
+                        '--hand-select-k', str(args.hand_select_k)]
             if args.fuse:
                 cmd += ['--fuse', args.fuse]
             if args.fused_dim:
@@ -418,6 +425,7 @@ def main():
             'settings': {'epochs': args.epochs, 'batch_size': args.batch_size,
                          'monitor': args.monitor or 'auroc',
                          'hand_select': args.hand_select or 'none',
+                         'hand_select_k': args.hand_select_k,
                          'fuse': args.fuse or 'early',
                          'fused_dim': args.fused_dim or 128,
                          'proto_pos': args.proto_pos, 'proto_neg': args.proto_neg,

@@ -241,8 +241,10 @@ def main():
                     help='手工特征标准化。默认 standard（每折只用训练行拟合 mean/std）；'
                          'none 为旧行为，694 维里基本只有 mw/charg 起作用')
     ap.add_argument('--hand-select', default='', choices=['', 'none', 'mi_rf'],
-                    help='手工特征筛选：mi_rf = 方差 + 相关性 + 互信息 + 随机森林'
-                         '选到 ≤80 维，只用本折训练行拟合（索引写进 run 目录）')
+                    help='手工/组合特征筛选：mi_rf = 方差 + 相关性 + 互信息 + 随机森林，'
+                         '只用本折训练行拟合（索引写进 run 目录）')
+    ap.add_argument('--hand-select-k', type=int, default=80,
+                    help='特征筛选保留的最大维度（默认 80；904 → 300 时设为 300）')
     ap.add_argument('--fuse', default='', choices=['', 'early', 'late'],
                     help='融合方式：early = 拼原始特征（旧行为）；late = 两路各投影到 '
                          'fused_dim 后做 [h_e,h_h,h_e*h_h,|h_e-h_h|] 交互')
@@ -269,6 +271,8 @@ def main():
     ap.add_argument('--run-name', default='', help='默认 fold{k}_{split_id}_m{seed}')
     ap.add_argument('--overwrite', action='store_true', help='run 目录已存在时覆盖')
     ap.add_argument('--quiet', action='store_true')
+    ap.add_argument('--no-hand', action='store_true',
+                    help='关掉手工特征支路（保留 ESM），消融/融合诊断用')
     ap.add_argument('--lnn-only', action='store_true',
                     help='探针：只训练 CfC 一条支路（关掉 ESM 与手工特征）')
     args = ap.parse_args()
@@ -311,6 +315,7 @@ def main():
         cfg.model.hand_norm = args.hand_norm
     if args.hand_select:
         cfg.model.hand_select = args.hand_select
+    cfg.model.hand_select_k = args.hand_select_k
     if args.fuse:
         cfg.model.fuse = args.fuse
     if args.fused_dim:
@@ -324,6 +329,9 @@ def main():
     cfg.model.lnn = bool(args.lnn)
     cfg.model.lnn_dim = args.lnn_dim
     cfg.model.lnn_dt = args.lnn_dt
+    if args.no_hand:
+        # 消融/融合诊断：只关手工支路，保留 ESM
+        cfg.model.use_hand = False
     if args.lnn_only:
         # 探针实验：回答"这条支路自己有没有信号"，先于任何融合尝试
         cfg.model.lnn = True
@@ -363,7 +371,7 @@ def main():
     h_idx = None
     if cfg.model.use_hand and cfg.model.hand_select != 'none':
         h_idx = select_hand_features(hand[folds['train']], y[folds['train']],
-                                     seed=cfg.train.seed)
+                                     seed=cfg.train.seed, top_k=cfg.model.hand_select_k)
         hand = hand[:, h_idx]
         cfg.model.hand_dim = int(hand.shape[1])
         save_hand_selector(os.path.join(run_dir, 'hand_selector.npz'), h_idx)
@@ -373,7 +381,7 @@ def main():
         cfg.model.hand_dim = hand_raw_dim
     if not cfg.model.use_hand:
         h_mean = h_std = None
-        print('[%s] 手工特征支路已关闭（--lnn-only），不做标准化' % run_name)
+        print('[%s] 手工特征支路已关闭（--no-hand/--lnn-only），不做标准化' % run_name)
     elif cfg.model.hand_norm == 'standard':
         # 只在本折训练行上拟合：val/test 的统计量参与进来就是泄漏
         h_mean, h_std = fit_hand_scaler(hand, folds['train'])
@@ -594,6 +602,7 @@ def main():
         'hand_norm': cfg.model.hand_norm,
         'hand_extra': cfg.model.hand_extra,
         'hand_select': cfg.model.hand_select,
+        'hand_select_k': cfg.model.hand_select_k,
         'hand_raw_dim': hand_raw_dim,
         'fuse': cfg.model.fuse,
         'fused_dim': cfg.model.fused_dim,

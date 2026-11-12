@@ -57,10 +57,11 @@ class ModelCfg:
     # 手工块追加项：'amphipath' = 694 + 10 维两亲性（704，**默认**）；
     #               '' = 只保留 694 维基础块（消融用，CLI 加 --no-amphipath）
     hand_extra: str = 'amphipath'
-    # 手工特征筛选：'none' = 全量 704 维（旧行为，默认）；'mi_rf' = 方差 + 相关性 +
-    # 互信息 + 随机森林选到 ≤80 维。只在**本折训练行**上拟合，索引落盘到
+    # 手工/组合特征筛选：'none' = 全量输入（默认）；'mi_rf' = 方差 + 相关性 +
+    # 互信息 + 随机森林选到 ≤hand_select_k 维。只在**本折训练行**上拟合，索引落盘到
     # hand_selector.npz；推理时必须用它复现（见 scripts/predict.py）。
     hand_select: str = 'none'
+    hand_select_k: int = 80
     # 融合方式：'early' = cat(ESM 池化, hand) 后进 MLP（旧行为，默认）；
     #           'late'  = 两条支路各自投影到 fused_dim，再做
     #                     [h_e, h_h, h_e*h_h, |h_e-h_h|] 的显式交互后进 MLP
