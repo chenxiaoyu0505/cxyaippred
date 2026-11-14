@@ -43,5 +43,10 @@
       "test_auroc": 0.785401,
       "test_aupr": 0.63533
     }
+  },
+  "abstain": {
+    "aurc_oof": 0.2126,
+    "aurc_test": 0.2232,
+    "note": "risk-coverage 曲线下面积，按 |p-tau| 排序；tau=0.396 来自池内 OOF"
   }
 }
