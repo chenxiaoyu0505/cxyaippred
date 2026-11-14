@@ -30,3 +30,8 @@ experiments/*/results/
 !heads/README.md
 !models/README.md
 !runs/README.md
+
+# ---- repro release package: keep probability arrays and delta weights in git ----
+!repro/**/*.npy
+!repro/**/*.pt
+repro/out/

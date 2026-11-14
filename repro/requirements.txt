@@ -1,0 +1,8 @@
+# 复现融合层（第 1 节）只需要这三个；版本为本项目对照实现
+numpy==1.26.0
+pandas==2.1.0
+scikit-learn==1.5.0
+
+# 复现 TLoRA 视角（第 4 节）才需要下面这些（CUDA 版 torch 请按自己显卡自行装）
+# torch>=2.0
+# transformers==4.48.1

@@ -1,0 +1,47 @@
+{
+  "tolerance": 0.0002,
+  "note": "run_4view.py 的对账基准。全部数字来自发布包内的冻结概率，融合层的贪心选权只用池内 OOF，test 897 条只在最后评估一次。",
+  "arms": {
+    "3view": {
+      "oof_auroc": 0.821008,
+      "test_auroc": 0.822881,
+      "test_aupr": 0.693284,
+      "weights": {
+        "hand": 0.555556,
+        "gap3": 0.222222,
+        "k4": 0.222222
+      },
+      "tau_from_oof": 0.425
+    },
+    "4view+TLoRA": {
+      "oof_auroc": 0.824091,
+      "test_auroc": 0.821932,
+      "test_aupr": 0.690383,
+      "weights": {
+        "hand": 0.37037,
+        "gap3": 0.222222,
+        "k4": 0.185185,
+        "TLoRA": 0.222222
+      },
+      "tau_from_oof": 0.396
+    }
+  },
+  "per_view": {
+    "hand": {
+      "test_auroc": 0.794223,
+      "test_aupr": 0.663175
+    },
+    "gap3": {
+      "test_auroc": 0.770982,
+      "test_aupr": 0.616108
+    },
+    "k4": {
+      "test_auroc": 0.778376,
+      "test_aupr": 0.630105
+    },
+    "TLoRA": {
+      "test_auroc": 0.785401,
+      "test_aupr": 0.63533
+    }
+  }
+}
