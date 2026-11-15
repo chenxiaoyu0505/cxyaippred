@@ -1,0 +1,85 @@
+{
+  "tolerance": 0.0002,
+  "note": "run_4view.py 的对账基准。全部数字来自发布包内的冻结概率；融合方式=rank（等权秩平均）。秩分只依赖队列内的相对次序，属 cohort-level 融合，单条序列无法单独推断；可部署口径见 greedy_reference（同一份概率 + 贪心权重）。test 897 条只在最后评估一次。",
+  "fuse": "rank",
+  "arms": {
+    "3view": {
+      "oof_auroc": 0.805674,
+      "test_auroc": 0.817404,
+      "test_aupr": 0.68037,
+      "weights": {
+        "hand": 0.333333,
+        "gap3": 0.333333,
+        "k4": 0.333333
+      },
+      "tau_from_oof": 0.3032,
+      "sn_at_tau": 0.8655,
+      "sp_at_tau": 0.6414,
+      "acc_at_tau": 0.7269,
+      "mcc_at_tau": 0.4951
+    },
+    "4view+TLoRA": {
+      "oof_auroc": 0.822876,
+      "test_auroc": 0.830009,
+      "test_aupr": 0.695816,
+      "weights": {
+        "hand": 0.25,
+        "gap3": 0.25,
+        "k4": 0.25,
+        "TLoRA": 0.25
+      },
+      "tau_from_oof": 0.2678,
+      "sn_at_tau": 0.8947,
+      "sp_at_tau": 0.6378,
+      "acc_at_tau": 0.7358,
+      "mcc_at_tau": 0.5218
+    }
+  },
+  "per_view": {
+    "hand": {
+      "test_auroc": 0.794223,
+      "test_aupr": 0.663175
+    },
+    "gap3": {
+      "test_auroc": 0.770982,
+      "test_aupr": 0.616108
+    },
+    "k4": {
+      "test_auroc": 0.778376,
+      "test_aupr": 0.630105
+    },
+    "TLoRA": {
+      "test_auroc": 0.785401,
+      "test_aupr": 0.63533
+    }
+  },
+  "greedy_reference": {
+    "3view": {
+      "test_auroc": 0.822881,
+      "test_aupr": 0.693284,
+      "weights": {
+        "hand": 0.555556,
+        "gap3": 0.222222,
+        "k4": 0.222222
+      }
+    },
+    "4view+TLoRA": {
+      "test_auroc": 0.821932,
+      "test_aupr": 0.690383,
+      "weights": {
+        "hand": 0.37037,
+        "gap3": 0.222222,
+        "k4": 0.185185,
+        "TLoRA": 0.222222
+      }
+    }
+  },
+  "abstain": {
+    "fuse": "rank",
+    "tau_from_oof": 0.2678,
+    "aurc_oof": 0.2495,
+    "aurc_test": 0.2464,
+    "aurc_random_oof": 0.2783,
+    "aurc_random_test": 0.2642
+  }
+}
