@@ -40,7 +40,7 @@ OUT = os.path.join(ROOT, "out")
 sys.path.insert(0, HERE)
 
 from run_4view import (load_split, view_arrays, tlora_arrays, greedy,  # noqa: E402
-                       pick_tau, VIEWS_ML)
+                       rank_fuse, mean_fuse, pick_tau, VIEWS_ML)
 
 
 # --------------------------------------------------------------- 基本构件
@@ -125,6 +125,8 @@ def main():
     ap.add_argument("--curve", action="store_true", help="打印 risk-coverage 曲线")
     ap.add_argument("--nested", action="store_true", help="留一折：阈值来自其余 4 折")
     ap.add_argument("--probs", help="n×4 概率文件（列序 hand,gap3,k4,TLoRA），打三态标签")
+    ap.add_argument("--fuse", choices=("rank", "rankw", "greedy", "mean"), default="rank",
+                    help="融合方式，需与 run_4view.py 一致（默认 rank）")
     ap.add_argument("--out", default=os.path.join(OUT, "abstain.json"))
     args = ap.parse_args()
 
@@ -137,15 +139,25 @@ def main():
     OOF["TLoRA"], TST["TLoRA"] = tlora_arrays(table, test, folds, oof_idx)
     ok = ~np.isnan(OOF["hand"])
 
-    w, ens, _ = greedy(VIEWS_ML + ["TLoRA"], OOF, y_pool[ok], ok)
-    tau, _ = pick_tau(y_pool[ok], ens)                      # τ 只用池内 OOF
-    p_oof = ens                                             # 池内 OOF 混合概率
-    p_test = sum(w[v] * TST[v] for v in w)
-    print(f"[blend] 权重 " + ", ".join(f"{k}={v:.3f}" for k, v in w.items()))
+    VS = VIEWS_ML + ["TLoRA"]
+    if args.fuse == "rank":
+        w, _, _, p_oof, p_test = rank_fuse(VS, OOF, TST, y_pool, ok)
+    elif args.fuse == "rankw":
+        gw, _, _ = greedy(VS, OOF, y_pool[ok], ok)
+        w, _, _, p_oof, p_test = rank_fuse(VS, OOF, TST, y_pool, ok, weights=gw)
+    elif args.fuse == "mean":
+        w, _, _, p_oof, p_test = mean_fuse(VS, OOF, TST, ok)
+    else:
+        w, ens, _ = greedy(VS, OOF, y_pool[ok], ok)
+        p_oof = ens
+        p_test = sum(w[v] * TST[v] for v in w)
+    tau, _ = pick_tau(y_pool[ok], p_oof)                    # τ 只用池内 OOF
+    print(f"[blend] {args.fuse}  权重 " + ", ".join(f"{k}={v:.3f}" for k, v in w.items()))
     print(f"[tau] 池内 OOF MCC 最优 τ = {tau:.4f}（test 未参与）")
     print(f"[data] 池内 OOF n={int(ok.sum())}   test n={len(y_test)}")
 
-    res = {"weights": {k: round(float(v), 6) for k, v in w.items()},
+    res = {"fuse": args.fuse,
+           "weights": {k: round(float(v), 6) for k, v in w.items()},
            "tau_from_oof": round(float(tau), 4)}
 
     # ---- 曲线 + AURC ----

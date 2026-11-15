@@ -5,13 +5,23 @@
 （冻结 ESM-2 650M + TLoRA(q/k/v) + posproj-adaptive 头，5 折概率平均）。
 
 本脚本只做**融合层**：读取 `repro/probs/` 与 `repro/tlora5/` 里已冻结的
-逐视角、逐折概率，重跑 Caruana 带放回贪心选权（27 轮，目标 = 池内 OOF AUROC），
-然后在固定 test 897 条上评估。所有选择都只用 OOF，test 不参与。
+逐视角、逐折概率，按 `--fuse` 指定的方式融合，然后在固定 test 897 条上评估。
+所有选择都只用池内 OOF，test 不参与选权。
+
+默认 `--fuse rank`：**秩平均（rank average）**
+  每个视角先在评估队列内转成 0-1 均匀秩分，再等权平均。
+  秩分再用池内 OOF 上拟合的 isotonic 映射回概率，供工作点（Sn/Sp/Acc/MCC）使用。
+  ⚠ 秩分依赖"整批样本"才能算（transductive / cohort-level）：
+    单条序列单独预测时无秩可比，部署场景应改用 `--fuse greedy`（固定权重、可单条推断）。
+
+对照口径（同一份冻结概率）：
+  greedy 0.8219 / mean 0.8226 / logit 0.8234 / stacking 0.8240 / **rank 0.8300**
 
 用法：
-  python scripts/run_4view.py                # 复现 + 与 expected.json 逐项对账
-  python scripts/run_4view.py --no-check     # 只打印，不判 PASS/FAIL
-  python scripts/run_4view.py --curve        # 额外打印弃权（risk-coverage）曲线
+  python scripts/run_4view.py                    # 默认 rank + 与 expected.json 逐项对账
+  python scripts/run_4view.py --fuse greedy      # 旧口径（Caruana 27 轮贪心）
+  python scripts/run_4view.py --no-check         # 只打印，不判 PASS/FAIL
+  python scripts/run_4view.py --curve            # 额外打印弃权（risk-coverage）曲线
 
 产物：`repro/out/report.json`
 """
@@ -22,6 +32,8 @@ import sys
 
 import numpy as np
 import pandas as pd
+from scipy.stats import rankdata
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (average_precision_score, matthews_corrcoef,
                              roc_auc_score)
 
@@ -96,6 +108,34 @@ def greedy(vs, OOF, y, ok, rounds=GREEDY_ROUNDS):
     return w, ens, trace
 
 
+def rank_fuse(vs, OOF, TST, y, ok, weights=None):
+    """秩平均：每个视角先在队列内转成 0-1 均匀秩分，再平均。
+
+    weights=None → 等权（默认 "rank"）；给出 weights → 加权秩平均（"rankw"，权来自贪心）。
+    秩分本身无概率含义，这里用池内 OOF 上拟合的 Platt（一维 logistic）把它映射成概率，
+    只为一个可解释的工作点（Sn/Sp/Acc/MCC）与 |p−τ| 弃权曲线。
+    Platt 是严格单调变换，所以 AUROC/AUPR 与秩分逐位相同（不会因并列而掉分）。
+    """
+    ro = {v: rankdata(OOF[v][ok]) / ok.sum() for v in vs}
+    rt = {v: rankdata(TST[v]) / len(TST[v]) for v in vs}
+    w = ({v: 1.0 / len(vs) for v in vs} if weights is None
+         else {v: float(weights[v]) / sum(weights.values()) for v in vs})
+    oof_score = sum(w[v] * ro[v] for v in vs)
+    test_score = sum(w[v] * rt[v] for v in vs)
+    cal = LogisticRegression(C=1e6, solver="lbfgs").fit(oof_score.reshape(-1, 1), y[ok])
+    return (w, oof_score, test_score,
+            cal.predict_proba(oof_score.reshape(-1, 1))[:, 1],
+            cal.predict_proba(test_score.reshape(-1, 1))[:, 1])
+
+
+def mean_fuse(vs, OOF, TST, ok):
+    """等权概率平均。"""
+    w = {v: 1.0 / len(vs) for v in vs}
+    oof = np.mean([OOF[v][ok] for v in vs], axis=0)
+    test = np.mean([TST[v] for v in vs], axis=0)
+    return w, oof, test, oof, test
+
+
 def boot_ci(y, p, n=2000, seed=0):
     rng = np.random.RandomState(seed)
     d = []
@@ -153,6 +193,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-check", action="store_true", help="不与 expected.json 对账")
     ap.add_argument("--curve", action="store_true", help="打印 risk-coverage 曲线")
+    ap.add_argument("--fuse", choices=("rank", "rankw", "greedy", "mean"), default="rank",
+                    help="融合方式：rank=等权秩平均（默认，cohort-level，不可单条推断）；"
+                         "rankw=按贪心权重的秩平均；greedy=Caruana 27 轮贪心（旧口径，可部署）；"
+                         "mean=等权概率平均")
     args = ap.parse_args()
 
     table, folds, test, seq2row, oof_idx = load_split()
@@ -175,23 +219,44 @@ def main():
         print(f"  {v:6s} OOF {o:.4f}   test {t:.4f} / AUPR {a:.4f}")
 
     arms = {}
+    greedy_ref = {}
     for tag, vs in [("3view", VIEWS_ML),
                     ("4view+TLoRA", VIEWS_ML + ["TLoRA"])]:
-        w, ens, trace = greedy(vs, OOF, y_pool[ok], ok)
-        blend = sum(w[v] * TST[v] for v in w)
+        # 贪心口径始终算一遍，作为可部署口径的对照（主表两行并列）
+        gw, gens, gtrace = greedy(vs, OOF, y_pool[ok], ok)
+        gblend = sum(gw[v] * TST[v] for v in gw)
+        greedy_ref[tag] = {"weights": {k: round(float(v), 6) for k, v in gw.items()},
+                           "oof_auroc": float(roc_auc_score(y_pool[ok], gens)),
+                           "test_auroc": float(roc_auc_score(y_test, gblend)),
+                           "test_aupr": float(average_precision_score(y_test, gblend)),
+                           "trace": gtrace}
+
+        if args.fuse == "rank":
+            w, ens, blend, oof_prob, test_prob = rank_fuse(vs, OOF, TST, y_pool, ok)
+        elif args.fuse == "rankw":
+            w, ens, blend, oof_prob, test_prob = rank_fuse(vs, OOF, TST, y_pool, ok,
+                                                           weights=gw)
+        elif args.fuse == "mean":
+            w, ens, blend, oof_prob, test_prob = mean_fuse(vs, OOF, TST, ok)
+        else:                                    # greedy：与历史发布一致
+            w, ens, blend = gw, gens, gblend
+            oof_prob, test_prob = ens, blend
+
         auc = float(roc_auc_score(y_test, blend))
         aupr = float(average_precision_score(y_test, blend))
         lo, hi = boot_ci(y_test, blend)
-        tau, oof_mcc = pick_tau(y_pool[ok], ens)
-        arms[tag] = {"weights": {k: round(float(v), 6) for k, v in w.items()},
+        tau, oof_mcc = pick_tau(y_pool[ok], oof_prob)
+        arms[tag] = {"fuse": args.fuse,
+                     "weights": {k: round(float(v), 6) for k, v in w.items()},
                      "oof_auroc": float(roc_auc_score(y_pool[ok], ens)),
                      "test_auroc": auc, "test_aupr": aupr,
                      "test_auroc_ci": [round(lo, 4), round(hi, 4)],
                      "tau_from_oof": round(tau, 4), "oof_mcc_at_tau": round(float(oof_mcc), 4),
-                     "test_at_tau": binmetrics(y_test, blend, tau),
-                     "test_at_0.5": binmetrics(y_test, blend, 0.5),
-                     "trace": trace}
-        print(f"\n--- {tag} ---")
+                     "test_at_tau": binmetrics(y_test, test_prob, tau),
+                     "test_at_0.5": binmetrics(y_test, test_prob, 0.5),
+                     "test_prob": [round(float(x), 6) for x in test_prob],
+                     "trace": gtrace}
+        print(f"\n--- {tag} ({args.fuse}) ---")
         print("  权重 " + ", ".join(f"{k}={v:.3f}" for k, v in w.items()))
         print(f"  OOF AUROC {arms[tag]['oof_auroc']:.4f}")
         print(f"  test AUROC {auc:.4f} [95% CI {lo:.4f}-{hi:.4f}]  AUPR {aupr:.4f}")
@@ -200,21 +265,26 @@ def main():
             d = arms[tag][key]
             print(f"  {key:12s} Sn {d['sn']:.3f} Sp {d['sp']:.3f} "
                   f"Acc {d['acc']:.3f} MCC {d['mcc']:.3f} 错 {d['errors']}")
+        if args.fuse != "greedy":
+            g = greedy_ref[tag]
+            print(f"  [对照] 贪心 test AUROC {g['test_auroc']:.4f} / AUPR {g['test_aupr']:.4f}"
+                  f"  权重 " + ", ".join(f"{k}={v:.3f}" for k, v in g["weights"].items()))
 
     curve = None
     if args.curve:
-        w = arms["4view+TLoRA"]["weights"]
-        blend = sum(w[v] * TST[v] for v in w)
-        curve = risk_coverage(y_test, blend)
-        print("\n--- 弃权曲线（按 |p-0.5| 保留）---")
+        curve = risk_coverage(y_test, np.array(arms["4view+TLoRA"]["test_prob"]))
+        print(f"\n--- 弃权曲线（{args.fuse}，按 |p-0.5| 保留）---")
         for r in curve:
             print(f"  保留 {r['coverage']*100:3.0f}%  n={r['n']:3d}  "
                   f"acc {r['acc']:.4f}  AUROC {r['auroc']:.4f}  错误率 {r['err_rate']:.4f}")
 
     os.makedirs(OUT, exist_ok=True)
     rep = {"data": {"pool": len(table), "test": len(test)},
-           "per_view": per_view, "arms": arms, "curve": curve,
-           "note": "权重的选择只用了池内 OOF；test 897 条只在最后评估一次。"}
+           "fuse": args.fuse, "per_view": per_view, "arms": arms,
+           "greedy_reference": greedy_ref, "curve": curve,
+           "note": ("融合方式 = " + args.fuse +
+                    "；权重的选择只用了池内 OOF；test 897 条只在最后评估一次。"
+                    " rank 为 cohort-level 融合（需整批样本算秩分），部署请用 greedy。")}
     with open(os.path.join(OUT, "report.json"), "w", encoding="utf-8") as f:
         json.dump(rep, f, ensure_ascii=False, indent=2)
     print(f"\n[saved] {os.path.join(OUT, 'report.json')}")
