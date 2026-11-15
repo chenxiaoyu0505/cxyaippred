@@ -14,6 +14,7 @@
 |---|---|---|---|---|---|---|
 | 1 | 2026-11-09 17:38 | `cv5` | 默认参数（无 EMA、无 MCC、无噪声、seed 0） | **完成** | `experiments/cv5/` | AUROC 0.7277±0.0130 / AUPR 0.6494±0.0103；单折主表 |
 | 2 | 2026-11-09 18:43 | `cv5_full` | `--ema --mcc-adaptive`（历史，MCC 已移除） | **完成** | `experiments/cv5_full/` | AUROC 0.7316±0.0060 / AUPR 0.6525±0.0049；但 MCC@0.5 降至 0.2505，校准变差 |
+| 3 | 2026-11-15 | `view5_rank_greedy`（离线融合，非 run_5fold） | `_work/scratch_pilot/view5/freeze_5view.py` | **完成** | `_work/scratch_pilot/view5/` | 五视角（+自训 35k 小 CNN）rank + 贪心权重：test **0.8308** / AUPR 0.6972；与四视角 0.8300 的 Δ CI 跨 0，主表仍报四视角。详见 `plan/VIEW5_RANK_GREEDY_2026-11-15.md` |
 
 状态取值：`运行中` / `完成` / `失败` / `中止`。
 
