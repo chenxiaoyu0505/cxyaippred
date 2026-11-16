@@ -9,6 +9,18 @@ Training config, unchanged: AdamW(lr=2e-3, wd=0.02), batch 32, BCEWithLogits,
 grad-norm clip 2.0, <=12 epochs, patience 4 on val AUROC, seed 0, sequences
 truncated/padded to LMAX=40 over the 20 standard amino acids (index 1 = any
 other character, 0 = pad).
+
+Changes vs the reference implementation (2026-11, branch fix/cnn-view-repro)
+---------------------------------------------------------------------------
+* BatchNorm1d -> per-position ChannelNorm (LayerNorm over channels). The conv
+  layers have biases, so padding positions carry non-zero responses; BN's
+  [B, C, L] statistics included them, making training statistics depend on the
+  length composition of each batch (the same bug family the root pipeline
+  fixed in src/model_aip.py). ChannelNorm normalises each position over its
+  own channels and is completely padding-independent. Parameter count is
+  unchanged (34,689): both norms carry one weight + one bias per channel.
+* Weight initialisation is now seeded per fold in train_cnn.py BEFORE model
+  construction (previously it drew from the unseeded global RNG).
 """
 import torch
 import torch.nn as nn
@@ -26,6 +38,22 @@ PATIENCE = 4
 CLIP = 2.0
 
 
+class ChannelNorm(nn.Module):
+    """Per-position LayerNorm over channels for [B, C, L] tensors.
+
+    Padding-independent by construction: each position is normalised over its
+    own channels only, so padded rows (and batch length composition) never
+    enter the statistics -- unlike the BatchNorm1d it replaces.
+    """
+
+    def __init__(self, ch):
+        super().__init__()
+        self.norm = nn.LayerNorm(ch)
+
+    def forward(self, x):                                 # [B, C, L]
+        return self.norm(x.transpose(1, 2)).transpose(1, 2)
+
+
 class CNN(nn.Module):
     """Two conv layers (k=3 + k=5, receptive field 7), ~35k parameters."""
 
@@ -33,9 +61,9 @@ class CNN(nn.Module):
         super().__init__()
         self.emb = nn.Embedding(22, d, padding_idx=0)
         self.c1 = nn.Conv1d(d, d, 3, padding=1)
-        self.b1 = nn.BatchNorm1d(d)
+        self.b1 = ChannelNorm(d)
         self.c2 = nn.Conv1d(d, d, 5, padding=2)
-        self.b2 = nn.BatchNorm1d(d)
+        self.b2 = ChannelNorm(d)
         self.drop = nn.Dropout(drop)
         self.head = nn.Linear(2 * d, 1)
 

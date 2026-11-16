@@ -141,9 +141,16 @@ def main():
                 print("[fold%d] reused %s TEST auroc=%.4f aupr=%.4f"
                       % (k, res["weights"], res["test_auroc"], res["test_aupr"]), flush=True)
             else:
-                # Reference protocol: the model is built, then train_one() seeds the
-                # global RNG with `seed` -- so the epoch order / dropout stream is
-                # identical for every fold given identical initialisation.
+                # Seed BEFORE building the model: nn.Module init consumes torch RNG,
+                # and the old code only seeded inside train_one() -- the weight init
+                # drew from the unseeded global RNG, so every run (and every --folds
+                # subset) silently produced different fold models. Per-fold seeding
+                # makes fold k identical whether trained alone or within all five.
+                # train_one() still re-seeds with `seed`, so the epoch order /
+                # dropout stream stays identical across folds given the (now
+                # deterministic) initialisation.
+                torch.manual_seed(args.seed + k)
+                np.random.seed(args.seed + k)
                 model = cl.CNN(d=64, drop=0.2).to(dev)
                 model, best, best_ep = cl.train_one(
                     model, Xtr_all[tr_idx], Mtr_all[tr_idx], y_tr[tr_idx],
