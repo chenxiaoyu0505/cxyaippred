@@ -69,7 +69,7 @@ def probs(model, X, M, bs=256):
     model.eval()
     out = []
     for i in range(0, len(X), bs):
-        out.append(torch.sigmoid(model(X[i:i + bs], M[i:i + bs])).numpy())
+        out.append(torch.sigmoid(model(X[i:i + bs], M[i:i + bs])).detach().cpu().numpy())
     import numpy as np
     return np.concatenate(out).astype(np.float64)
 
@@ -84,7 +84,7 @@ def train_one(model, Xtr, Mtr, ytr, Xva, Mva, yva, seed=0, epochs=EPOCHS,
     best, best_state, best_ep, bad = -1.0, None, -1, 0
     for ep in range(epochs):
         model.train()
-        idx = torch.randperm(n)
+        idx = torch.randperm(n, device=ytr.device)
         for i in range(0, n, BS):
             b = idx[i:i + BS]
             opt.zero_grad()
@@ -93,7 +93,7 @@ def train_one(model, Xtr, Mtr, ytr, Xva, Mva, yva, seed=0, epochs=EPOCHS,
             nn.utils.clip_grad_norm_(model.parameters(), CLIP)
             opt.step()
         p = probs(model, Xva, Mva)
-        auc = float(roc_auc_score(yva.numpy(), p))
+        auc = float(roc_auc_score(yva.detach().cpu().numpy(), p))
         log("  [ep%d] val_auroc=%.4f" % (ep, auc))
         if auc > best:
             best, bad, best_ep = auc, 0, ep

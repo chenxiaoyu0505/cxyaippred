@@ -107,6 +107,9 @@ def main():
         y_te = te.label.values.astype(int)
 
         dev = torch.device(args.device)
+        # keep every tensor on the same device (CPU default, CUDA with --device cuda)
+        Xtr_all, Mtr_all = Xtr_all.to(dev), Mtr_all.to(dev)
+        Xte, Mte, y_tr = Xte.to(dev), Mte.to(dev), y_tr.to(dev)
         per_fold = []
         for k in folds:
             t0 = time.time()
