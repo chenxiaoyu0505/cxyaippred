@@ -1,0 +1,4 @@
+orig_row,sequence_raw,label,label_name,reason
+211,cyclo-[D-Pro-D-Pro-D-β3-HoPhe-D-Phe-],0,阴性（绝对阴性，A 级证据）,drop: 环肽 + D 型/β3 非标准残基，无法转单字母
+255,H-Pro-Ile-Asn-Tyr-Ala-Nva-Ser-Phe-Leu-Ser-NH2,0,阴性（绝对阴性，A 级证据）,drop: Nva（正缬氨酸）非标准残基，无法转单字母
+257,N-formyl-Met-Leu-Phe,0,阴性（绝对阴性，A 级证据）,drop: N 端甲酰化（fMLP），N 端非标准
