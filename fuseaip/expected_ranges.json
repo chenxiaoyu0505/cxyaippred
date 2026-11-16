@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "note": "Targets for a from-scratch run (`python fuseaip/scripts/run_all.py`). AUROC on test1.csv (817 rows, 262 positives), folds = StratifiedKFold(5, shuffle=True, random_state=42) over train1.csv in file order. The three ML views are deterministic given the code + data + seed and are checked to 1e-3 against the values measured on the release machine; the two deep views involve SGD, so they get ranges instead of point values. Fusion ranges are generous on purpose: the weights are re-derived from OOF every run.",
+    "tolerance": 0.001,
+    "fusion_column": "rank_greedy",
+    "measured_on": "test1.csv"
+  },
+  "views": {
+    "hand": {"auroc": 0.7822, "tol": 0.001, "note": "single ExtraTrees seed 0 (the earlier 3-seed average gave 0.7825)."},
+    "gap3": {"auroc": 0.7574, "tol": 0.001, "note": "single ExtraTrees seed 0 (3-seed average: 0.7578)."},
+    "k4": {"auroc": 0.7652, "tol": 0.001, "note": "single ExtraTrees seed 0 (3-seed average: 0.7702)."},
+    "tlora": {
+      "auroc_range": [0.72, 0.85],
+      "note": "TEMPORARY band, to be tightened after the first full run on the target machine. Anchors from earlier runs (same train1 rows, official folds.csv, same hyperparameters): an independent implementation scored per-fold 0.7559/0.7954/0.6799/0.8092/0.7834 -> 0.7919 when its five test-probability vectors are averaged; this package's own full run under the old fold column gave 0.7719; the earlier release's frozen delta weights score 0.7957 on these 817 rows. Fold-to-fold spread is ~0.03 and the 5-fold average moves ~0.02 between runs, so the band's job is to catch a broken implementation (0.70 or 0.88), not to pin a seed. The historical 0.8268 headline came from a StratifiedKFold re-split of the pooled data and never reported per-fold scores on these 817 rows."
+    },
+    "cnn": {
+      "auroc_range": [0.65, 0.75],
+      "note": "TEMPORARY band, to be tightened after the first full run. The frozen CNN checkpoints score 0.7145 on these 817 rows, the historical paper table says 0.6965 (different fold assignment), and a 12-epoch SGD run of this 34,689-parameter net under the old fold column landed at 0.7255. Expect 0.69-0.73."
+    }
+  },
+  "fusion": {
+    "3view": {"auroc_range": [0.78, 0.86], "note": "TEMPORARY band (ML-only fusion; the deep views do not enter this tier)."},
+    "4view": {"auroc_range": [0.79, 0.87], "note": "TEMPORARY band, to be tightened after the first full run."},
+    "5view": {"auroc_range": [0.79, 0.87], "note": "TEMPORARY band, to be tightened after the first full run."}
+  }
+}

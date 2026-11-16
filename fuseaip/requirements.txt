@@ -1,0 +1,14 @@
+# Runtime requirements for the fuseaip release.
+# Tested with: Python 3.11.14, torch 2.11.0.dev+cu128, transformers 4.48.1,
+# scikit-learn 1.5.0, numpy 1.26.0, pandas 2.x, scipy 1.x, CUDA 12.8 driver.
+#
+# The GPU is only needed for the TLoRA view (ESM-2 650M). Everything else --
+# data check, the three ML views, the small CNN, fusion, verification -- runs
+# on CPU. torch is still imported by the CNN view, so install the CPU wheel if
+# you have no GPU: it is ~10x slower for TLoRA but works.
+torch>=2.1
+transformers==4.48.1
+numpy<2
+pandas>=2.0
+scipy>=1.10
+scikit-learn>=1.4

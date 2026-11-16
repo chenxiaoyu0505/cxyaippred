@@ -1,0 +1,38 @@
+{
+  "description": "Data shipped with the fuseaip release. train1/test1 are the DeepAIP official split minus the 385 dual-function peptides listed in conflicts_385.csv. Cross-validation folds are NOT stored in the data: every trainer derives them at runtime with StratifiedKFold(5, shuffle=True, random_state=42) over train1.csv in file order (see README, Cross-validation protocol).",
+  "files": {
+    "train1.csv": {
+      "rows": 3278,
+      "positives": 1060,
+      "columns": ["sequence", "label", "length"],
+      "sha256": "86b8740de721e8755dc3bc1129a15b3bc0753fc340ce05261402fddde9abadb3",
+      "note": "no fold column: folds are recomputed at runtime from the row order + labels."
+    },
+    "test1.csv": {
+      "rows": 817,
+      "positives": 262,
+      "columns": ["sequence", "label", "length"],
+      "sha256": "d79e222d02deb38b661899f08a513d6695f7fd40980edec9e1b15b54f5a11d20",
+      "note": "never used for fitting or for threshold selection."
+    },
+    "conflicts_385.csv": {
+      "rows": 385,
+      "sha256": "415ac26774d8e3ef2746fc80f3aa51a17fbd3aaac37ecc209d9d18ac6b720582",
+      "note": "documentation only: the peptides removed from train0/test0 to build train1/test1 (305 + 80 rows). Nothing in the pipeline reads this file."
+    }
+  },
+  "cv": {
+    "scheme": "StratifiedKFold(5, shuffle=True, random_state=42)",
+    "applied_to": "train1.csv rows in file order",
+    "note": "Derived at runtime by every trainer. build_splits.py prints the per-fold sizes/positives and a short hash of each fold's row ids and compares them to the reference block below (advisory: a mismatch means a different scikit-learn release reshuffled the folds).",
+    "reference_folds": {
+      "0": {"n_val": 656, "n_pos": 212, "sha": "0cc399f4"},
+      "1": {"n_val": 656, "n_pos": 212, "sha": "215923d0"},
+      "2": {"n_val": 656, "n_pos": 212, "sha": "c1dd95b1"},
+      "3": {"n_val": 655, "n_pos": 212, "sha": "0d868b6e"},
+      "4": {"n_val": 655, "n_pos": 212, "sha": "e4053dd0"}
+    },
+    "reference_env": "scikit-learn 1.5.0 / numpy 1.26.0"
+  },
+  "train_test_overlap": 0
+}
