@@ -1,0 +1,33 @@
+{
+  "train0.csv": {
+    "rows": 3583,
+    "positives": 1365,
+    "sha256": "a68c35cb2e98a8b74482d206f7ab267ed28b4afa77cfec0ef6437a168b7ed519"
+  },
+  "test0.csv": {
+    "rows": 897,
+    "positives": 342,
+    "sha256": "506e5b43bb084deea1bace7a5ecc18f0af173556c200fd703d3ddbe8896d3a32"
+  },
+  "conflicts_385.csv": {
+    "rows": 385,
+    "positives": null,
+    "sha256": "415ac26774d8e3ef2746fc80f3aa51a17fbd3aaac37ecc209d9d18ac6b720582"
+  },
+  "pool_folds.csv": {
+    "rows": 3583,
+    "positives": null,
+    "sha256": "85daaf704ffe8ceda3b7b611caf9dd6864c18892a878bddcee3707609d037fd4"
+  },
+  "train1.csv": {
+    "rows": 3278,
+    "positives": 1060,
+    "sha256": "c3c2be19852892b87779c354595ffbb0517351bd6027a4a51978137693305406"
+  },
+  "test1.csv": {
+    "rows": 817,
+    "positives": 262,
+    "sha256": "d79e222d02deb38b661899f08a513d6695f7fd40980edec9e1b15b54f5a11d20"
+  },
+  "note": "train1 = train0 - conflicts_385 (305 rows removed, 3,583 -> 3,278); test1 = test0 - conflicts_385 (80 rows removed, 897 -> 817). fold comes from pool_folds.csv (= DeepAIP official folds.csv val split)."
+}

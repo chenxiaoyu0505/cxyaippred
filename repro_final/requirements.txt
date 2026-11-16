@@ -1,0 +1,19 @@
+# 5 视角复现包 —— 依赖
+#
+# 训练时使用的环境（Windows 11）：
+#   python 3.11, torch 2.11.0+cu128, transformers 4.48.1,
+#   scikit-learn 1.5.0, numpy 1.26.0
+#
+# CUDA 版 torch 只对 TLoRA 视角是硬要求（fp16 ESM-2 650M）。
+# 只跑 3 个机器学习视角 / 只跑 CNN 的话，CPU 版 torch 甚至不需要装：
+#   run_ml_views.py 只依赖 numpy / pandas / scikit-learn / scipy
+#
+# 安装（建议先按 https://pytorch.org 选对应 CUDA 版本的 torch）：
+#   pip install -r requirements.txt
+#
+torch>=2.0
+transformers==4.48.1
+scikit-learn==1.5.0
+numpy==1.26.0
+pandas>=1.5
+scipy>=1.9

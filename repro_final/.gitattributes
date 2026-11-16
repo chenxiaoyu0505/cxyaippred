@@ -1,0 +1,3 @@
+# Keep every shipped byte exactly as committed: the data manifest is a sha256 of
+# the file content, so git must not rewrite line endings on checkout.
+* -text

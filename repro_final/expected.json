@@ -1,0 +1,49 @@
+{
+  "meta": {
+    "tolerance": 0.001,
+    "cohort": "test1 = 817 rows / 262 positives (official DeepAIP test minus the 385 AIP+/PIP+ conflicts)",
+    "source_of_paper_numbers": "_work/wt-drop385/view5_t1/view5_t1.json",
+    "note": "two groups: 'paper' = the released table, measured on out/fused_published.json; 'weights' = what the surviving checkpoints give when re-inferred, measured on out/fused_weights.json. See README 'Deep views: what is actually reproducible'."
+  },
+  "paper": {
+    "note": "frozen released probabilities for TLoRA/CNN, ML views retrained from sequence",
+    "views": {
+      "hand": {"test_auroc": 0.7825, "test_aupr": 0.5943, "oof_auroc": 0.7934},
+      "gap3": {"test_auroc": 0.7578, "test_aupr": 0.5402, "oof_auroc": 0.7366},
+      "k4": {"test_auroc": 0.7702, "test_aupr": 0.5644, "oof_auroc": 0.7430},
+      "TLoRA": {"test_auroc": 0.8268, "test_aupr": 0.6474, "oof_auroc": 0.7738},
+      "CNN": {"test_auroc": 0.6965, "test_aupr": 0.4913, "oof_auroc": 0.6795}
+    },
+    "fusion": {
+      "3view": {"auroc": 0.8135, "aupr": 0.6207, "oof_auroc": 0.8172},
+      "4view": {"auroc": 0.8393, "aupr": 0.6639, "oof_auroc": 0.8283},
+      "5view": {"auroc": 0.8398, "aupr": 0.6676, "oof_auroc": 0.8305}
+    },
+    "equal": {
+      "3view": {"auroc": 0.8064},
+      "4view": {"auroc": 0.8354},
+      "5view": {"auroc": 0.8275}
+    }
+  },
+  "weights": {
+    "tolerance": 0.002,
+    "note": "re-inference from weights/: TLoRA = the 5-fold pool-trained arm (wt-tlora5), CNN = same-protocol retrain. Group tolerance 2e-3 because bf16 GPU kernels are not bit-reproducible across devices.",
+    "views": {
+      "hand": {"test_auroc": 0.7825, "test_aupr": 0.5943, "oof_auroc": 0.7934},
+      "gap3": {"test_auroc": 0.7578, "test_aupr": 0.5402, "oof_auroc": 0.7366},
+      "k4": {"test_auroc": 0.7702, "test_aupr": 0.5644, "oof_auroc": 0.7430},
+      "TLoRA": {"test_auroc": 0.7957, "test_aupr": 0.5719, "oof_auroc": 0.7707},
+      "CNN": {"test_auroc": 0.7145, "test_aupr": 0.5078, "oof_auroc": 0.6770}
+    },
+    "fusion": {
+      "3view": {"auroc": 0.8134, "aupr": 0.6207, "oof_auroc": 0.8172},
+      "4view": {"auroc": 0.8272, "aupr": 0.6275, "oof_auroc": 0.8237},
+      "5view": {"auroc": 0.8283, "aupr": 0.6356, "oof_auroc": 0.8252}
+    },
+    "equal": {
+      "3view": {"auroc": 0.8064},
+      "4view": {"auroc": 0.8259},
+      "5view": {"auroc": 0.8233}
+    }
+  }
+}
