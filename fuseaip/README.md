@@ -308,3 +308,31 @@ ESM-2 (`facebook/esm2_t33_650M_UR50D`) is distributed by Meta under the MIT
 license; the weights are downloaded at runtime and not redistributed here. The
 code in this directory follows the terms of the parent repository (`cxyaippred`),
 which ships no separate LICENSE file.
+
+## Archived weights (optional: reproduce the 0.8268 TLoRA view without training)
+
+`weights/trained/` can optionally carry the five trained TLoRA deltas (8.3 MB
+each, ~42 MB total) plus the five CNN state dicts (~0.15 MB each). When present,
+the deep views can be scored instead of retrained:
+
+    python fuseaip/scripts/train_tlora.py --reuse            # all five folds
+    python fuseaip/scripts/train_cnn.py   --reuse
+
+`--reuse` rebuilds the model, restores the delta from the `.pt`, and evaluates
+val/test once — no optimiser step, so it is bit-identical across machines as long
+as the same ESM-2 checkpoint is used. Reference numbers from these exact files
+(test1, 817 rows / 262 positives):
+
+| fold | TLoRA test AUROC | TLoRA AUPR | CNN test AUROC |
+|---|---|---|---|
+| 0 | 0.7559 | 0.6159 | 0.6812 |
+| 1 | 0.8579 | 0.6974 | — |
+| 2 | 0.8064 | 0.6585 | — |
+| 3 | 0.7517 | 0.5831 | — |
+| 4 | 0.7834 | 0.4919 | — |
+| mean-of-prob ensemble | **0.8269** | 0.6474 | 0.7009 |
+
+Per-fold AUROC spread (0.75-0.86) is a property of this protocol, not a
+reproduction failure: three of five folds pick `best_ep=1`, so the view is decided
+by the first epoch. Dropping fold 1 leaves an ensemble of 0.7904. Integrity:
+`weights/trained/SHA256SUMS.txt`.
