@@ -135,4 +135,4 @@ the ESM-2 backbone (Lin et al., 2023). The adapter follows TLoRA
 
 ## License
 
-Released for research use; see `LICENSE`.
+MIT; see `LICENSE`.
