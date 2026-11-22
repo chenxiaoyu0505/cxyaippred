@@ -1,0 +1,10 @@
+out/
+__pycache__/
+*.pyc
+*.log
+.DS_Store
+
+example_input_prismaip.csv
+
+!weights/**/*.pt
+!weights/**/*.npz

@@ -1,0 +1,36 @@
+{
+  "cv": {
+    "applied_to": "train1 rows in file order",
+    "fold_sizes": [
+      717,
+      717,
+      717,
+      716,
+      716
+    ],
+    "positives_per_fold": 212,
+    "scheme": "StratifiedKFold(5, shuffle=True, random_state=42)"
+  },
+  "source": "DeepAIP split (Zhu et al., 2024, Int J Biol Macromol); train1/test1 are that split after removing the 385 peptides that are labelled pro-inflammatory in ProIn-Fuse",
+  "test1": {
+    "length_max": 30,
+    "length_min": 11,
+    "positives": 262,
+    "rows": 817,
+    "sha256": "d79e222d02deb38b661899f08a513d6695f7fd40980edec9e1b15b54f5a11d20"
+  },
+  "train1": {
+    "length_max": 30,
+    "length_min": 11,
+    "positives": 1060,
+    "rows": 3278,
+    "sha256": "86b8740de721e8755dc3bc1129a15b3bc0753fc340ce05261402fddde9abadb3"
+  },
+  "views": [
+    "hand",
+    "gap4",
+    "k5",
+    "tlora",
+    "cnn"
+  ]
+}

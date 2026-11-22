@@ -1,0 +1,44 @@
+{
+  "fusion": {
+    "aupr_test": 0.7105,
+    "auroc_oof": 0.8402,
+    "auroc_test": 0.8602,
+    "tau": 0.279
+  },
+  "n_pos_test": 262,
+  "n_test": 817,
+  "views": {
+    "cnn": {
+      "aupr_test": 0.5123,
+      "auroc_oof": 0.6533,
+      "auroc_test": 0.7095
+    },
+    "gap4": {
+      "aupr_test": 0.6345,
+      "auroc_oof": 0.7632,
+      "auroc_test": 0.8071
+    },
+    "hand": {
+      "aupr_test": 0.604,
+      "auroc_oof": 0.7904,
+      "auroc_test": 0.7857
+    },
+    "k5": {
+      "aupr_test": 0.6408,
+      "auroc_oof": 0.782,
+      "auroc_test": 0.8017
+    },
+    "tlora": {
+      "aupr_test": 0.6474,
+      "auroc_oof": 0.7738,
+      "auroc_test": 0.8269
+    }
+  },
+  "weights": {
+    "cnn": 0.037,
+    "gap4": 0.1111,
+    "hand": 0.1852,
+    "k5": 0.3333,
+    "tlora": 0.3333
+  }
+}
